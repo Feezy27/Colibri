@@ -75,7 +75,7 @@
   .cadre.pleinEcranActif{position:absolute;inset:0;z-index:55;border-radius:0}
   .neuf16{aspect-ratio:9/16;position:relative;overflow:hidden;background:var(--image)}
   .apZoom{position:absolute;inset:0;transform-origin:50% 50%}
-  .btnPlein{position:absolute;top:8px;left:8px;width:38px;height:38px;border:0;border-radius:8px;
+  .btnPlein{position:absolute;bottom:10px;right:10px;width:38px;height:38px;border:0;border-radius:8px;
     background:rgba(20,20,15,.55);color:#fff;font-size:17px;line-height:1;cursor:pointer;
     display:flex;align-items:center;justify-content:center;touch-action:manipulation}
   .transportPlein{position:absolute;left:0;right:0;bottom:14px;display:flex;align-items:center;
@@ -89,7 +89,7 @@
     font:700 34px/1 inherit;color:#fff;mix-blend-mode:multiply;opacity:.55}
   .neuf16 .media{position:absolute;inset:0;transform-origin:50% 45%;overflow:hidden;background:var(--encre)}
   .neuf16 .media:empty{display:none}
-  .neuf16 .media video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  .neuf16 .media video,.neuf16 .media img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
   .st{position:absolute;transform:translate(-50%,-100%);text-align:center;
     color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.75);line-height:1.18;white-space:pre-line;
     pointer-events:none;font-weight:600;max-width:84%}
@@ -124,13 +124,18 @@
   .bloc.sst.verif{box-shadow:inset 0 0 0 2px var(--accent)}
   .bloc .d{font-weight:400;color:var(--gris);font-size:11px}
   .bloc.audio .d{color:rgba(255,255,255,.8)}
-  .bloc.selectionne{touch-action:none;cursor:grab;box-shadow:0 0 0 2px var(--accent);z-index:4}
+  .bloc.selectionne{touch-action:none;cursor:grab;border:3px solid var(--accent);z-index:4}
   .bloc.saisi{opacity:.55;box-shadow:0 0 0 2px var(--accent);cursor:grabbing;z-index:6}
-  .poignee{position:absolute;top:0;bottom:0;width:26px;display:flex;align-items:center;justify-content:center;
-    background:rgba(255,255,255,.28);cursor:ew-resize;touch-action:none;z-index:7;color:var(--encre)}
-  .poignee.g{left:0;border-radius:9px 0 0 9px}
-  .poignee.d{right:0;border-radius:0 9px 9px 0}
-  .bloc.audio .poignee,.bloc.sst .poignee{display:none}
+  /* Poignées en aplat de couleur d'accent, pas en calque translucide : sur un
+     clip clair comme sur un fond sombre, elles doivent se voir immédiatement
+     comme des éléments à part, jamais se confondre avec le bloc. */
+  .poignee{position:absolute;top:3px;bottom:3px;width:30px;display:flex;align-items:center;justify-content:center;
+    background:var(--accent);color:#fff;cursor:ew-resize;touch-action:none;z-index:7;
+    box-shadow:0 0 0 1.5px rgba(255,255,255,.9)}
+  .poignee.g{left:3px;border-radius:7px}
+  .poignee.d{right:3px;border-radius:7px}
+  .bloc.sst .poignee{display:none}
+  .bloc.audio .poignee{background:#fff;color:var(--accent);box-shadow:0 0 0 1.5px var(--accent)}
   .tete{position:absolute;top:0;bottom:0;width:2px;background:var(--accent);pointer-events:none;z-index:5;will-change:transform}
   .prec{display:flex;gap:6px;padding:2px var(--padBande) 0}
   .prec button{flex:1;min-height:44px;border:1px solid var(--bord);background:#fff;border-radius:10px;
@@ -247,7 +252,7 @@ function mesure(txt,px){
 const COUT_LIGNE=12, COUT_OUTIL=400, B_FORTE=-14, B_FAIBLE=-8, POIDS=9;
 
 /** Découpage optimal : toutes les coupures évaluées, jamais de remplissage glouton. */
-function decouperLignes(para, taillePct, largeurImage){
+function decouperLignes(para, taillePct, largeurImage, maxMots){
   const M = mots(para); const n = M.length; if(!n) return [];
   const px  = taillePct/100*largeurImage;
   const max = largeurImage*.84;
@@ -258,6 +263,7 @@ function decouperLignes(para, taillePct, largeurImage){
   cout[n]=0;
   for(let i=n-1;i>=0;i--){
     for(let j=i+1;j<=n;j++){
+      if(maxMots && j-i>maxMots) break; // plafond dur de mots par sous-titre
       const l=L[i][j];
       if(l>max && j>i+1) break;
       if(cout[j]===Infinity) continue;
@@ -480,9 +486,116 @@ function regenerer(){
   E.projet.sousTitres = st.concat(E.projet.sousTitres.filter(s=>!s.paragrapheId)).sort((a,b)=>a.debut-b.debut);
 }
 
+/* ---------- 2 ter. Montage automatique ----------------------------------
+   Séquençage par les silences structurants, sous-titres à 7 mots maximum
+   coupés aux phrases, et assemblage des médias sur les séquences. */
+
+const MOTS_MAX_ST = 7;      // plafond dur, demandé
+const SILENCE_MIN_SEQ = 0.5; // en deçà, c'est une respiration, pas une transition
+
+/* Un silence « structurant » sépare deux séquences ; une respiration interne
+   non. On les distingue par leur durée relative aux autres pauses du même
+   enregistrement, avec un plancher absolu : sur une récitation posée, toutes
+   les pauses se ressemblent, et un seuil purement relatif en découperait
+   des dizaines. */
+function sequencerAudio(env){
+  const rep = reperes(env);
+  const seuil = Math.min(rep.fond+9, rep.parole-3);
+  const toutes = detecterPauses(env, seuil, 0.15);
+  const P = parole(toutes, env.duree);
+  const debutVoix = P.seg.length ? P.seg[0].debut : 0;
+  const finVoix   = P.seg.length ? P.seg[P.seg.length-1].fin : env.duree;
+
+  // Seules comptent les pauses situées entre le premier et le dernier mot :
+  // le blanc initial et le blanc final ne sont pas des transitions.
+  const internes = toutes.filter(p=>p.debut>debutVoix+0.05 && p.fin<finVoix-0.05);
+  /* Distinguer respiration et transition. Un seuil relatif à la médiane
+     échoue dès que TOUS les silences sont structurants : deux pauses de 0,9 s
+     donnent une médiane de 0,9 et un seuil qui les rejette toutes les deux.
+     On cherche donc une vraie rupture dans la distribution des durées : s'il
+     existe un écart net entre les courtes et les longues, il sépare les deux
+     familles ; sinon, elles sont toutes de même nature et seul le plancher
+     absolu s'applique. */
+  let seuilStruct = SILENCE_MIN_SEQ;
+  if(internes.length>=2){
+    const durees = internes.map(p=>p.fin-p.debut).sort((a,b)=>a-b);
+    let meilleur=1, coupure=-1;
+    for(let i=0;i<durees.length-1;i++){
+      const r = durees[i+1]/Math.max(durees[i],1e-6);
+      if(r>meilleur){ meilleur=r; coupure=i; }
+    }
+    if(meilleur>=1.6) seuilStruct = Math.max(SILENCE_MIN_SEQ, durees[coupure+1]);
+  }
+  const silences = internes.filter(p=>p.fin-p.debut>=seuilStruct);
+
+  const sequences=[]; let t=debutVoix;
+  for(const sil of silences){ sequences.push({debut:t, fin:sil.debut}); t=sil.fin; }
+  sequences.push({debut:t, fin:finVoix});
+
+  return {sequences, silences, pauses:toutes, debutVoix, finVoix, seuilStruct};
+}
+
+/* Découpe en phrases sans lookbehind (non supporté par les Safari anciens). */
+function phrases(texte){
+  const t = texte.replace(/\s+/g," ").trim();
+  if(!t) return [];
+  const out=[]; let cur="";
+  for(const m of t.split(" ")){
+    cur = cur ? cur+" "+m : m;
+    if(/[.!?…]["»'’)\]]*$/.test(m)){ out.push(cur); cur=""; }
+  }
+  if(cur) out.push(cur);
+  return out;
+}
+
+/* Un sous-titre ne franchit jamais une fin de phrase : on découpe phrase par
+   phrase, puis à l'intérieur avec le même choix optimal de coupure que le
+   reste de l'application, sous plafond de 7 mots. */
+function sousTitresDuTexte(texte, taillePct, largeurImage){
+  const out=[];
+  for(const ph of phrases(texte)){
+    for(const l of decouperLignes(ph, taillePct, largeurImage, MOTS_MAX_ST)) out.push(l);
+  }
+  return out;
+}
+
+/* Répartition syllabique sur le temps de parole, puis respect strict des
+   silences : aucun sous-titre ne doit rester affiché pendant un blanc. */
+function calerSousTitresAuto(textes, pauses, dureeVoix, decalage){
+  if(!textes.length) return [];
+  const P = parole(pauses, dureeVoix);
+  const syl = textes.map(t=>Math.max(1,syllabes(t)));
+  const tot = syl.reduce((a,b)=>a+b,0);
+
+  const bornes=[P.seg.length?P.seg[0].debut:0];
+  let cum=0;
+  for(let i=0;i<textes.length;i++){ cum+=syl[i]; bornes.push(versReel(P, cum/tot*P.total)); }
+
+  const longues = pauses.filter(p=>p.fin-p.debut>0.28);
+  const out=[];
+  for(let i=0;i<textes.length;i++){
+    let d=bornes[i], f=bornes[i+1];
+    const pr=pauseProche(pauses,f,0.32); if(pr && pr.debut>=d) f=pr.debut;
+    for(const q of longues){
+      if(d>q.debut && d<q.fin) d=q.fin;
+      if(f>q.debut && f<q.fin) f=q.debut;
+      if(q.debut>=d && q.fin<=f) f=q.debut;
+    }
+    f=Math.max(f,d);
+    if(f-d<0.08){ // ne jamais rallonger à l'intérieur d'un silence
+      let plafond=d+0.08;
+      for(const q of longues) if(q.debut>=d && q.debut<plafond) plafond=q.debut;
+      f=Math.max(f,plafond);
+    }
+    out.push({debut:d+decalage, fin:f+decalage, texte:textes[i]});
+  }
+  for(let i=1;i<out.length;i++) if(out[i].debut<out[i-1].fin) out[i].debut=out[i-1].fin;
+  return out;
+}
+
 /* ---------- 2 bis. Fichiers réels ---------------------------------------- */
 
-const MEDIA = { sons:{}, videos:{} };
+const MEDIA = { sons:{}, videos:{}, images:{} };
 let ctxAudio=null;
 
 function choisirFichier(accept, multiple, cb){
@@ -534,8 +647,10 @@ const E = {
       {id:"c4",nom:"Plan 4",debut:0,fin:7.1,finMax:11.0,zoomAmplitude:10,zoomSens:"arriere"},
     ],
     audios:[
-      {id:"a1",nom:"voix-off.m4a (démo)",duree:ENV_DEMO.duree,decalage:0,env:ENV_DEMO,url:null},
-      {id:"a2",nom:"ambiance-rue.wav (démo)",duree:22.4,decalage:2.0,env:ENV_DEMO2,url:null},
+      // debut = point d'entrée dans le fichier ; dureeSource = longueur totale
+      // du fichier, donc borne d'allongement. duree = longueur effectivement jouée.
+      {id:"a1",nom:"voix-off.m4a (démo)",duree:ENV_DEMO.duree,dureeSource:ENV_DEMO.duree,debut:0,decalage:0,env:ENV_DEMO,url:null},
+      {id:"a2",nom:"ambiance-rue.wav (démo)",duree:22.4,dureeSource:22.4,debut:0,decalage:2.0,env:ENV_DEMO2,url:null},
     ],
     sousTitres:[], paragraphes:[], texteSource:"", voixOffId:null,
     style:{couleur:"#FFFFFF",police:"sans",taillePct:5,x:50,y:88},
@@ -545,6 +660,7 @@ const E = {
   pile:["montage"], ctx:{}, annulations:[], tete:null, toast:null, lecture:null,
   pleinEcran:false, zoomAp:{scale:1}, echellePxS:null,
   blocSelectionne:null, // {type,id} — un bloc à la fois ; il faut le sélectionner avant de le glisser
+  auto:null, // parcours de montage automatique en cours
 };
 window.E = E; // lecture seule, pour le banc d'essai
 
@@ -713,8 +829,10 @@ function monterMedia(t, avecZoom){
   const cadre=document.getElementById("apMedia"); if(!cadre) return null;
   const p=planA(t);
   const v=(p && MEDIA.videos[p.c.id]) || null;
+  const img=(p && !v && MEDIA.images[p.c.id]) || null;
+  const el = v || img;
   const actuel=cadre.firstElementChild;
-  if(v!==actuel){ if(actuel) actuel.remove(); if(v) cadre.appendChild(v); }
+  if(el!==actuel){ if(actuel) actuel.remove(); if(el) cadre.appendChild(el); }
   if(v && p){
     const local = p.c.debut + p.dans*(p.c.fin-p.c.debut);
     try{ if(!enLecture() || Math.abs(v.currentTime-local)>0.3) v.currentTime=local; }catch(e){}
@@ -723,7 +841,7 @@ function monterMedia(t, avecZoom){
   }
   for(const id in MEDIA.videos){ const o=MEDIA.videos[id]; if(o!==v && !o.paused) o.pause(); }
   cadre.style.transform="scale("+zoomDe(p,avecZoom).toFixed(4)+")";
-  return v;
+  return el;
 }
 
 function peindreApercu(t, stForce, avecZoom){
@@ -767,8 +885,8 @@ function bande(){
     const court = w<64;
     const sel = E.blocSelectionne && E.blocSelectionne.type==="clip" && E.blocSelectionne.id===c.id;
     const poignees = sel ? `
-      <div class="poignee g" data-poignee="debut" data-id="${c.id}" aria-label="Raccourcir ou allonger le début">${icone("chevronG")}</div>
-      <div class="poignee d" data-poignee="fin" data-id="${c.id}" aria-label="Raccourcir ou allonger la fin">${icone("chevronD")}</div>` : "";
+      <div class="poignee g" data-poignee="debut" data-cible="clip" data-id="${c.id}" aria-label="Raccourcir ou allonger le début">${icone("chevronG")}</div>
+      <div class="poignee d" data-poignee="fin" data-cible="clip" data-id="${c.id}" aria-label="Raccourcir ou allonger la fin">${icone("chevronD")}</div>` : "";
     clips += `<div class="bloc clip${sel?" selectionne":""}" data-type="clip" data-id="${c.id}" style="left:${x}px;width:${w-3}px"
       aria-label="Clip ${i+1}, ${d.toFixed(1)} secondes${sel?", sélectionné":""}">
       <div>${i+1}</div>${court?"":`<div class="d num">${d.toFixed(1)} s</div>${z}`}${poignees}</div>`;
@@ -777,9 +895,12 @@ function bande(){
   P.audios.forEach(a=>{
     const w=Math.max(a.duree*ech,40);
     const sel = E.blocSelectionne && E.blocSelectionne.type==="audio" && E.blocSelectionne.id===a.id;
+    const ph = sel ? `
+      <div class="poignee g" data-poignee="debut" data-cible="audio" data-id="${a.id}" aria-label="Raccourcir ou allonger le début">${icone("chevronG")}</div>
+      <div class="poignee d" data-poignee="fin" data-cible="audio" data-id="${a.id}" aria-label="Raccourcir ou allonger la fin">${icone("chevronD")}</div>` : "";
     audios += `<div class="rang"><div class="bloc audio${sel?" selectionne":""}" data-type="audio" data-id="${a.id}"
       style="left:${a.decalage*ech}px;width:${w-3}px" aria-label="Bande son ${esc(a.nom)}${sel?", sélectionnée":""}">
-      <div>${esc(a.nom)}</div>${w<80?"":`<div class="d num">${a.duree.toFixed(1)} s</div>`}</div></div>`;
+      <div>${esc(a.nom)}</div>${w<80?"":`<div class="d num">${a.duree.toFixed(1)} s</div>`}${ph}</div></div>`;
   });
   let sst="";
   P.sousTitres.forEach(s=>{
@@ -1136,21 +1257,28 @@ function brancherGlisse(){
   });
 
   /* Poignées de raccourcissement / allongement, façon montage natif de
-     l'iPhone : uniquement sur un clip sélectionné. Le bord gauche du bloc
-     reste ancré aux clips précédents (c'est ce qui garantit qu'ils restent
-     bout à bout) ; seule sa largeur bouge, dans les deux sens — jusqu'à
-     finMax pour retrouver de la matière déjà raccourcie. */
+     l'iPhone. Sur un clip : le bord gauche reste ancré aux clips précédents
+     (c'est ce qui les garde bout à bout), seule la largeur bouge. Sur une
+     bande son : elle flotte librement dans le temps, donc raccourcir le début
+     avance aussi son point d'entrée dans le fichier, en gardant sa fin fixe.
+     Note : le §4.4 interdisait toute découpe audio ; changement demandé. */
   const DUREE_MIN_CLIP = 0.3;
   piste.querySelectorAll(".poignee").forEach(h=>{
     h.addEventListener("pointerdown",dep=>{
       if(Geste.pince || Geste.actifs.size>=2) return;
       dep.preventDefault(); dep.stopPropagation();
-      const cote=h.dataset.poignee, id=h.dataset.id;
-      const c=E.projet.clips.find(x=>x.id===id); if(!c) return;
+      const cote=h.dataset.poignee, cible=h.dataset.cible||"clip", id=h.dataset.id;
+      const estAudio = cible==="audio";
+      const o = estAudio ? E.projet.audios.find(x=>x.id===id) : E.projet.clips.find(x=>x.id===id);
+      if(!o) return;
       const ech=echelle();
-      const bloc=piste.querySelector('.bloc.clip[data-id="'+id+'"]');
+      const bloc=piste.querySelector('.bloc.'+(estAudio?"audio":"clip")+'[data-id="'+id+'"]');
       const dEl = bloc ? bloc.querySelector(".d") : null;
-      const debut0=c.debut, fin0=c.fin, finMax=c.finMax??fin0;
+
+      // Instantané de l'état de départ : tout est calculé par rapport à lui.
+      const S = estAudio
+        ? {debut:o.debut||0, duree:o.duree, decalage:o.decalage, source:o.dureeSource ?? o.duree}
+        : {debut:o.debut, fin:o.fin, finMax:o.finMax ?? o.fin};
       const x0=dep.clientX;
       let raf=null, dx=0, annule=false;
 
@@ -1168,16 +1296,31 @@ function brancherGlisse(){
 
       function calculer(){
         const dt=dx/ech;
-        let debut=debut0, fin=fin0;
-        if(cote==="debut") debut=Math.max(0, Math.min(fin0-DUREE_MIN_CLIP, debut0+dt));
-        else fin=Math.max(debut0+DUREE_MIN_CLIP, Math.min(finMax, fin0+dt));
+        if(estAudio){
+          if(cote==="debut"){
+            // On ne peut pas entrer avant le début du fichier, ni réduire
+            // sous la durée minimale : la fin reste fixe dans le temps.
+            const min=-S.debut, max=S.duree-DUREE_MIN_CLIP;
+            const d=Math.max(min, Math.min(max, dt));
+            return {debut:S.debut+d, duree:S.duree-d, decalage:S.decalage+d};
+          }
+          const max=S.source-S.debut, d=Math.max(DUREE_MIN_CLIP, Math.min(max, S.duree+dt));
+          return {debut:S.debut, duree:d, decalage:S.decalage};
+        }
+        let debut=S.debut, fin=S.fin;
+        if(cote==="debut") debut=Math.max(0, Math.min(S.fin-DUREE_MIN_CLIP, S.debut+dt));
+        else fin=Math.max(S.debut+DUREE_MIN_CLIP, Math.min(S.finMax, S.fin+dt));
         return {debut,fin};
       }
       function peindre(){
         raf=null;
-        const {debut,fin}=calculer();
-        if(bloc) bloc.style.width=(Math.max((fin-debut)*ech,26)-3)+"px";
-        if(dEl) dEl.textContent=(fin-debut).toFixed(1)+" s";
+        const r=calculer();
+        const duree = estAudio ? r.duree : (r.fin-r.debut);
+        if(bloc){
+          bloc.style.width=(Math.max(duree*ech, estAudio?40:26)-3)+"px";
+          if(estAudio) bloc.style.left=(r.decalage*ech)+"px";
+        }
+        if(dEl) dEl.textContent=duree.toFixed(1)+" s";
       }
       function planifier(){ if(raf==null) raf=requestAnimationFrame(peindre); }
       const bouger=e2=>{ if(annule) return; dx=e2.clientX-x0; planifier(); };
@@ -1189,10 +1332,14 @@ function brancherGlisse(){
         h.removeEventListener("pointercancel",finir);
         if(raf!=null){ cancelAnimationFrame(raf); raf=null; }
         if(typeof e2?.clientX==="number") dx=e2.clientX-x0;
-        const {debut,fin}=calculer();
-        if(Math.abs(debut-debut0)<1e-6 && Math.abs(fin-fin0)<1e-6){ rendre(); return; }
+        const r=calculer();
+        const inchange = estAudio
+          ? (Math.abs(r.duree-S.duree)<1e-6 && Math.abs(r.debut-S.debut)<1e-6)
+          : (Math.abs(r.debut-S.debut)<1e-6 && Math.abs(r.fin-S.fin)<1e-6);
+        if(inchange){ rendre(); return; }
         agir(cote==="debut"?"Ajustement du début":"Ajustement de la fin", ()=>{
-          c.debut=debut; c.fin=fin;
+          if(estAudio){ o.debut=r.debut; o.duree=r.duree; o.decalage=r.decalage; }
+          else { o.debut=r.debut; o.fin=r.fin; }
         });
       };
       h.addEventListener("pointermove",bouger);
@@ -1268,6 +1415,7 @@ EC.montage = () => {
         <span class="tps" id="tLect">${tpsD(tL())} / ${tpsD(dureeTotale())}</span>
       </div>${bande()}
       <div style="padding:0 var(--marge)">
+      <button class="rangee" data-go="autoTexte"><span>Montage automatique</span><span class="fleche">›</span></button>
       <button class="rangee" data-act="importer"><span>Importer une vidéo</span><span class="fleche">+</span></button>
       <button class="rangee" data-go="sons"><span>Bandes son</span><span class="cpt num">${P.audios.length}</span><span class="fleche">›</span></button>
       <button class="rangee" data-go="soustitres"><span>Sous-titres</span><span class="cpt num">${P.sousTitres.length}</span><span class="fleche">›</span></button>
@@ -1390,6 +1538,64 @@ EC.calage = () => {
     pied:`<button class="principal" data-act="calerTexte">Caler le texte</button>`,
   };
 };
+
+/* ---------- Montage automatique : trois écrans ---------------------------
+   texte → bande son (séquençage) → un média par séquence → montage. */
+
+EC.autoTexte = () => ({
+  barre:{g:`<button data-act="quitterAuto">Annuler</button>`, titre:"Montage automatique"},
+  corps:`
+    <textarea data-in="autoTexte" placeholder="Collez votre texte">${esc(E.auto?.texte ?? "")}</textarea>
+    <div class="legende" style="margin-top:8px">
+      Le texte sert de source unique aux sous-titres. Rien n'y sera ajouté ni corrigé.
+    </div>
+    <div class="micro">Ensuite</div>
+    <div class="legende">
+      La bande son de la voix sera analysée pour repérer les silences. Chaque silence
+      marque un changement de plan : vous choisirez ensuite un média par séquence.
+    </div>`,
+  pied:`<button class="principal" data-act="autoChoisirSon">Choisir la bande son</button>`,
+});
+
+EC.autoMedias = () => {
+  const A = E.auto || {sequences:[], medias:[]};
+  const nSeq = A.sequences.length;
+  const manquant = A.medias.findIndex(m=>!m);
+  const tousChoisis = manquant<0;
+  const nSil = Math.max(0, nSeq-1);
+  return {
+    barre:{g:`<button data-act="quitterAuto">Annuler</button>`, titre:"Montage automatique"},
+    corps:`
+      <div class="legende" style="padding:6px 0 2px">
+        ${nSil} silence${nSil>1?"s":""} détecté${nSil>1?"s":""} dans la voix, donc
+        <b>${nSeq} séquence${nSeq>1?"s":""}</b>. Choisissez un média par séquence,
+        dans l'ordre d'apparition.
+      </div>
+      <div class="micro">Séquences</div>
+      ${A.sequences.map((sq,i)=>{
+        const m=A.medias[i];
+        const d=(sq.fin-sq.debut);
+        return `<button class="rangee" data-act="autoMedia:${i}">
+          <span class="num" style="color:var(--gris);font-size:13px;flex:none;width:64px">${tpsD(sq.debut)}</span>
+          <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${m?esc(m.nom):"Choisir un média"}${m&&m.kind==="image"?" · image":""}</span>
+          <span class="cpt num">${d.toFixed(1)} s</span><span class="fleche">${m?"↺":"+"}</span></button>`;
+      }).join("")}
+      <div class="legende" style="padding-top:14px">
+        Une vidéo plus longue que sa séquence sera coupée à la bonne durée.
+        Une image recevra un zoom lent, pour qu'elle ne soit jamais figée.
+      </div>`,
+    pied: tousChoisis
+      ? `<button class="principal" data-act="autoMonter">Lancer le montage</button>`
+      : `<div class="legende" style="text-align:center">Il reste ${A.medias.filter(m=>!m).length} média(s) à choisir.</div>`,
+  };
+};
+
+EC.autoEnCours = () => ({
+  barre:{titre:"Montage en cours…"},
+  corps:`<div style="padding-top:120px"><div class="jauge"><i id="jaugeAuto"></i></div>
+    <div class="legende" id="jaugeAutoTxt">Analyse de la voix</div></div>`,
+});
 
 EC.encours = () => ({
   // Un écran de progression sans issue est un piège : « Annuler » à sa place
@@ -1560,6 +1766,7 @@ function saisie(champ,val,el){
     agir("Changement de taille",()=>{ E.projet.style.taillePct=n; regenerer(); }); return;
   }
   if(champ==="texte"){ E.ctx.texte=val; return; }
+  if(champ==="autoTexte"){ E.auto=Object.assign(E.auto||{sequences:[],medias:[]},{texte:val}); return; }
   if(champ==="stTexte"){ const s=E.projet.sousTitres.find(x=>x.id===E.ctx.stId); if(s) s.texte=val; return; }
 }
 function majTexteProche(el,txt){ const d=el.parentElement.querySelector("div.num"); if(d) d.textContent=txt; }
@@ -1632,7 +1839,7 @@ function acte(a){
         const id="a"+Date.now();
         MEDIA.sons[id] = Object.assign(new Audio(URL.createObjectURL(file)),{preload:"auto"});
         agir("Ajout d'une bande son",()=>{
-          P.audios.push({id,nom:file.name,duree,decalage:0,env,url:true});
+          P.audios.push({id,nom:file.name,duree,dureeSource:duree,debut:0,decalage:0,env,url:true});
           E.toastEnAttente = file.name+" ajouté, "+tpsD(duree)+".";
         });
       }catch(e){ toast("Ce fichier audio n'a pas pu être lu."); }
@@ -1662,7 +1869,7 @@ function acte(a){
           const bande = P.audios.find(a=>a.id===voix) || P.audios[0];
           const r=caler(txt, bande && bande.env);
           if(!r){ E.pile=["montage","soustitres"]; E.toastEnAttente="Calage impossible : texte ou bande son manquants."; return; }
-          const dec = bande ? bande.decalage : 0;
+          const dec = bande ? (bande.decalage - (bande.debut||0)) : 0; // source -> montage
           r.paragraphes.forEach(p=>{ p.debut+=dec; p.fin+=dec; });
           P.texteSource=txt; P.voixOffId=voix;
           P.paragraphes=r.paragraphes; E.pauses=r.pauses; E.compteRendu=r.compteRendu;
@@ -1692,6 +1899,131 @@ function acte(a){
     E.pleinEcran=!E.pleinEcran; E.zoomAp={scale:1}; // le pincement ne survit pas à l'entrée/sortie
     return rendre();
   }
+  if(nom==="quitterAuto"){ E.auto=null; E.pile=["montage"]; return rendre(true); }
+
+  if(nom==="autoChoisirSon"){
+    const txt = (E.auto && E.auto.texte) || "";
+    if(!txt.trim()){ toast("Collez d'abord votre texte."); return; }
+    choisirFichier("audio/*,.m4a,.mp3,.wav,.aac,.ogg", false, async file=>{
+      E.pile.push("autoEnCours"); rendre();
+      const j=document.getElementById("jaugeAuto"); if(j) j.style.width="35%";
+      try{
+        const {env,duree} = await analyserAudio(file);
+        const sq = sequencerAudio(env);
+        const id="a"+Date.now();
+        MEDIA.sons[id]=Object.assign(new Audio(URL.createObjectURL(file)),{preload:"auto"});
+        E.auto = Object.assign(E.auto||{}, {
+          texte:txt, audio:{id,nom:file.name,duree,env}, ...sq,
+          medias:new Array(sq.sequences.length).fill(null),
+        });
+        E.pile=["montage","autoMedias"]; rendre();
+      }catch(e){
+        E.pile=["montage","autoTexte"]; rendre();
+        toast("Ce fichier audio n'a pas pu être lu.");
+      }
+    });
+    return;
+  }
+
+  if(nom==="autoMedia"){
+    const i=parseInt(arg,10);
+    choisirFichier("video/*,image/*", false, async file=>{
+      const estImage = /^image\//.test(file.type);
+      const url=URL.createObjectURL(file);
+      try{
+        if(estImage){
+          const im=document.createElement("img");
+          im.src=url; im.alt="";
+          await new Promise((res,rej)=>{
+            im.addEventListener("load",res,{once:true});
+            im.addEventListener("error",rej,{once:true});
+            setTimeout(rej,12000);
+          });
+          E.auto.medias[i]={kind:"image", nom:file.name, el:im, duree:Infinity};
+        } else {
+          const v=document.createElement("video");
+          v.src=url; v.preload="auto"; v.playsInline=true;
+          const duree=await new Promise((res,rej)=>{
+            v.addEventListener("loadedmetadata",()=>res(v.duration),{once:true});
+            v.addEventListener("error",rej,{once:true});
+            setTimeout(rej,12000);
+          });
+          E.auto.medias[i]={kind:"video", nom:file.name, el:v, duree};
+        }
+        rendre();
+      }catch(e){ toast("Ce fichier n'a pas pu être lu."); }
+    });
+    return;
+  }
+
+  if(nom==="autoMonter"){
+    const A=E.auto;
+    if(!A || A.medias.some(m=>!m)) return;
+    E.pile.push("autoEnCours"); rendre();
+    const jt=document.getElementById("jaugeAutoTxt");
+    if(jt) jt.textContent="Calage des sous-titres";
+    const j=document.getElementById("jaugeAuto"); if(j) j.style.width="60%";
+
+    setTimeout(()=>{
+      agir("Montage automatique", ()=>{
+        const env=A.audio.env;
+
+        /* Les clips sont lus bout à bout : pour que l'image reste synchrone
+           avec la voix, ils doivent couvrir TOUTE la durée, silences compris.
+           On coupe donc au milieu de chaque silence — le silence est bien la
+           transition, et chaque plan en porte la moitié. */
+        const coupes=[0];
+        for(const sil of A.silences) coupes.push((sil.debut+sil.fin)/2);
+        coupes.push(env.duree);
+
+        const clips=[]; const avertissements=[];
+        A.sequences.forEach((sq,i)=>{
+          const m=A.medias[i];
+          const besoin=coupes[i+1]-coupes[i];
+          const id="c"+Date.now()+"_"+i;
+          if(m.kind==="image"){
+            MEDIA.images[id]=m.el;
+            // Zoom lent systématique : une image figée décroche l'attention.
+            clips.push({id,nom:m.nom,debut:0,fin:besoin,finMax:besoin,
+              zoomAmplitude:10,zoomSens: i%2 ? "arriere":"avant"});
+          } else {
+            MEDIA.videos[id]=m.el;
+            const garde=Math.min(m.duree,besoin);
+            if(m.duree<besoin-0.05)
+              avertissements.push(`la séquence ${i+1} dure ${besoin.toFixed(1)} s mais son média n'en fait que ${m.duree.toFixed(1)}`);
+            clips.push({id,nom:m.nom,debut:0,fin:garde,finMax:m.duree,
+              zoomAmplitude:0,zoomSens:"avant"});
+          }
+        });
+
+        const P=E.projet;
+        P.clips=clips;
+        P.audios=[{id:A.audio.id,nom:A.audio.nom,duree:A.audio.duree,
+          dureeSource:A.audio.duree,debut:0,decalage:0,env,url:true}];
+        P.voixOffId=A.audio.id;
+        P.texteSource=A.texte;
+        P.paragraphes=[];
+        P.style.x=50; P.style.y=88; // sous-titres toujours en bas, au centre
+
+        const textes=sousTitresDuTexte(A.texte,P.style.taillePct,1080);
+        const cales=calerSousTitresAuto(textes,A.pauses,env.duree,0);
+        P.sousTitres=cales.map(c=>({id:"s"+Math.random().toString(36).slice(2),
+          debut:c.debut,fin:c.fin,texte:c.texte,paragrapheId:null}));
+        E.pauses=A.pauses;
+
+        const nSeq=A.sequences.length;
+        let phrase=`${nSeq} séquence${nSeq>1?"s":""} montée${nSeq>1?"s":""} sur `+
+          `${A.silences.length} silence${A.silences.length>1?"s":""}, `+
+          `${P.sousTitres.length} sous-titres de 7 mots au plus.`;
+        if(avertissements.length) phrase+=" À vérifier : "+avertissements.join(" ; ")+".";
+        E.compteRendu={total:0,surPause:0,estimees:0,ecart:0,phrase};
+        E.toastEnAttente=phrase;
+        E.auto=null; E.pile=["montage"]; E.lecture={t:0};
+      });
+    },220);
+    return;
+  }
+
   if(nom==="debut"){ arreterLecture(); E.lecture={t:0}; rendre(); assurerVisible("debut"); return; }
   if(nom==="fin"){ arreterLecture(); E.lecture={t:Math.max(0,dureeTotale()-0.05)}; rendre(); assurerVisible("fin"); return; }
   if(nom==="lire"||nom==="lecture"){
@@ -1769,14 +2101,17 @@ function acte(a){
 
 function medias(){
   const out=[];
-  for(const a of E.projet.audios){ const el=MEDIA.sons[a.id]; if(el) out.push({el,debut:a.decalage,fin:a.decalage+a.duree}); }
+  for(const a of E.projet.audios){
+    const el=MEDIA.sons[a.id];
+    if(el) out.push({el, debut:a.decalage, fin:a.decalage+a.duree, entree:a.debut||0});
+  }
   return out;
 }
 function synchroniserMedias(t, force){
   for(const m of medias()){
     const dedans = t>=m.debut && t<m.fin;
     if(dedans){
-      const local = t-m.debut;
+      const local = t-m.debut+m.entree; // le point d'entrée décale la lecture dans le fichier
       if(force || Math.abs(m.el.currentTime-local)>0.25){ try{ m.el.currentTime=local; }catch(e){} }
       if(enLecture() && m.el.paused) m.el.play().catch(()=>{});
       if(!enLecture() && !m.el.paused) m.el.pause();
