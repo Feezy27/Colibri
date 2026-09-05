@@ -2,16 +2,16 @@
 <html lang="fr">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, minimum-scale=1, user-scalable=no">
 <title>Coupe</title>
 <style>
   :root{
-    --fond:#F6F5F1; --hors:#EDEBE5; --encre:#14140F; --accent:#E4572E;
+    --fond:#F6F5F1; --hors:#EDEBE5; --encre:#14140F; --accent:#0B7D70; /* vert d'eau */
     --gris:#8A887F; --sep:#E2E0D8; --bord:#DAD7CD; --clip:#DEDCD3; --image:#CBC8BE;
-    --marge:20px; --rayon:14px;
+    --marge:20px; --rayon:14px; --padBande:14px;
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-  html,body{margin:0;height:100%}
+  html,body{margin:0;height:100%;touch-action:manipulation} /* pas de pincement ni de double-appui : seules la bande de montage et l'aperçu en plein écran gèrent eux-mêmes le pincement */
   body{
     background:var(--hors); color:var(--encre);
     font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,sans-serif;
@@ -72,7 +72,19 @@
 
   /* ---- aperçu 9:16 ---- */
   .cadre{background:var(--encre);border-radius:var(--rayon);display:flex;justify-content:center;position:relative;overflow:hidden}
+  .cadre.pleinEcranActif{position:absolute;inset:0;z-index:55;border-radius:0}
   .neuf16{aspect-ratio:9/16;position:relative;overflow:hidden;background:var(--image)}
+  .apZoom{position:absolute;inset:0;transform-origin:50% 50%}
+  .btnPlein{position:absolute;top:8px;left:8px;width:38px;height:38px;border:0;border-radius:8px;
+    background:rgba(20,20,15,.55);color:#fff;font-size:17px;line-height:1;cursor:pointer;
+    display:flex;align-items:center;justify-content:center;touch-action:manipulation}
+  .transportPlein{position:absolute;left:0;right:0;bottom:14px;display:flex;align-items:center;
+    justify-content:center;gap:10px;touch-action:manipulation}
+  .transportPlein button{flex:none;width:52px;height:48px;border:0;border-radius:12px;
+    background:rgba(20,20,15,.55);color:#fff;font-size:17px;display:flex;align-items:center;justify-content:center;cursor:pointer}
+  .transportPlein button.jouer{width:66px;font-size:19px}
+  .transportPlein .tps{color:#fff;font-size:13px;font-variant-numeric:tabular-nums;
+    position:absolute;bottom:56px;left:0;right:0;text-align:center;text-shadow:0 1px 3px rgba(0,0,0,.7)}
   .neuf16 .plan{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
     font:700 34px/1 inherit;color:#fff;mix-blend-mode:multiply;opacity:.55}
   .neuf16 .media{position:absolute;inset:0;transform-origin:50% 45%;overflow:hidden;background:var(--encre)}
@@ -87,16 +99,16 @@
     font:600 13px/1 inherit;padding:5px 7px;border-radius:6px}
 
   /* ---- bande de montage ---- */
-  .bandeEnt{display:flex;justify-content:space-between;align-items:baseline;padding:0 var(--marge);margin:14px 0 6px}
+  .bandeEnt{display:flex;justify-content:space-between;align-items:baseline;padding:0 var(--padBande);margin:0 0 4px}
   .bandeEnt .t{font-size:13px;font-weight:600;letter-spacing:.7px;text-transform:uppercase;color:var(--gris)}
   .bandeEnt .v{font-size:13px;color:var(--accent);font-weight:600}
-  .defil{overflow-x:auto;overflow-y:hidden;padding:0 var(--marge) 6px;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain}
+  .defil{overflow-x:auto;overflow-y:hidden;padding:0 var(--padBande) 6px;-webkit-overflow-scrolling:touch;overscroll-behavior-x:contain;touch-action:pan-x pan-y}
   .piste{position:relative;height:auto}
-  .regle{height:22px;position:relative;border-bottom:1px solid var(--sep);margin-bottom:6px}
+  .regle{height:20px;position:relative;border-bottom:1px solid var(--sep);margin-bottom:4px}
   .regle i{position:absolute;top:10px;width:1px;height:8px;background:var(--bord)}
   .regle span{position:absolute;top:-2px;font:400 11px/1 inherit;color:var(--gris);font-variant-numeric:tabular-nums}
-  .rang{position:relative;height:44px;margin-bottom:6px}
-  .rang.st{height:30px}
+  .rang{position:relative;height:44px;margin-bottom:4px}
+  .rang.st{height:26px}
   .bloc{position:absolute;top:0;bottom:0;border-radius:10px;overflow:hidden;
     display:flex;flex-direction:column;justify-content:center;padding:0 8px;
     font:600 12px/1.2 inherit;cursor:grab;touch-action:none;user-select:none;will-change:transform}
@@ -109,12 +121,14 @@
   .bloc.audio .d{color:rgba(255,255,255,.8)}
   .bloc.saisi{opacity:.55;box-shadow:0 0 0 2px var(--accent);cursor:grabbing;z-index:6}
   .tete{position:absolute;top:0;bottom:0;width:2px;background:var(--accent);pointer-events:none;z-index:5;will-change:transform}
-  .prec{display:flex;gap:8px;padding:2px var(--marge) 0}
-  .prec button{flex:1;min-height:44px;border:1px solid var(--bord);background:#fff;border-radius:12px;
-    font:600 15px/1 inherit;color:var(--encre);cursor:pointer}
+  .prec{display:flex;gap:6px;padding:2px var(--padBande) 0}
+  .prec button{flex:1;min-height:44px;border:1px solid var(--bord);background:#fff;border-radius:10px;
+    font:600 14px/1 inherit;color:var(--encre);cursor:pointer}
   .prec button[aria-pressed=true]{background:var(--encre);color:#fff;border-color:var(--encre)}
-  .pas{padding:8px var(--marge) 0;font-size:13px;color:var(--gris);font-variant-numeric:tabular-nums}
-  .transport{display:flex;align-items:center;gap:10px;padding:10px var(--marge) 0}
+  .pas{padding:5px var(--padBande) 0 0;font-size:12px;color:var(--gris);font-variant-numeric:tabular-nums}
+  .bandeCadre{margin:10px var(--marge) 0;background:var(--hors);border:1px solid var(--bord);
+    border-radius:16px;padding:8px 0 7px;position:relative}
+  .transport{display:flex;align-items:center;gap:10px;padding:6px var(--marge) 0}
   .transport button{flex:none;width:58px;height:52px;border:1px solid var(--bord);background:#fff;
     border-radius:12px;font:400 17px/1 inherit;color:var(--encre);cursor:pointer;
     display:flex;align-items:center;justify-content:center}
@@ -157,6 +171,13 @@
 
 <script>
 "use strict";
+
+/* Sur iOS Safari, le pincement natif de la PAGE peut passer outre touch-action
+   pour ce geste précis. Chaque zone qui doit répondre au pincement — bande de
+   montage, aperçu en plein écran — le fait elle-même via ses propres pointeurs ;
+   le geste natif du navigateur n'a donc jamais de raison de s'activer. */
+document.addEventListener("gesturestart", e=>e.preventDefault());
+document.addEventListener("gesturechange", e=>e.preventDefault());
 /* =========================================================================
    Coupe — prototype cliquable.
    Le découpage des lignes, les mots-outils, la répartition syllabique et le
@@ -509,12 +530,54 @@ const E = {
   },
   pauses:[], compteRendu:null,
   pile:["montage"], ctx:{}, annulations:[], tete:null, toast:null, lecture:null,
+  pleinEcran:false, zoomAp:{scale:1}, echellePxS:null,
 };
 window.E = E; // lecture seule, pour le banc d'essai
 
-const PAS   = {large:.5, normal:.1, precis:.02};
-const ECH   = {large:7, normal:22, precis:76};
-const GRAD  = {large:10, normal:5, precis:1};
+/* Échelle de la bande de montage, en pixels par seconde. Continue : le
+   pincement la fait varier d'un mouvement fluide, sans paliers. Les trois
+   boutons sont des raccourcis exprimés en pourcentage du montage entier :
+   100 % montre tout (l'ancien « Large »), 50 % en montre la moitié (donc une
+   échelle deux fois plus resserrée), 25 % le quart (quatre fois). Ce sont des
+   raccourcis, pas des bornes — pincer au-delà continue simplement. */
+const ECH_MAX = 200;
+const POURCENTAGES = {100:1, 50:2, 25:4};
+
+function echelleMinimale(){
+  const dispo=(E.largeurBande||330)-4;
+  return Math.max(1.2, dispo/Math.max(dureeTotale(),1));
+}
+function echelle(){
+  if(E.echellePxS==null) E.echellePxS = echelleMinimale()*POURCENTAGES[50]; // départ à 50 %
+  return Math.max(echelleMinimale(), Math.min(ECH_MAX, E.echellePxS));
+}
+function clampEchelle(v){ return Math.max(echelleMinimale(), Math.min(ECH_MAX, v)); }
+
+/* Pas de calage : plus fin quand on est zoomé de près, plus large en vue
+   d'ensemble. Cinq paliers repères choisis en échelle logarithmique, pour que
+   le pas suive le zoom sans jamais donner l'impression de sauter. */
+function pasContinu(px){
+  const paliers=[0.5,0.25,0.1,0.05,0.02], refs=[7,14,22,44,76];
+  let meilleur=paliers[0], ecartMin=Infinity;
+  for(let i=0;i<paliers.length;i++){
+    const ecart=Math.abs(Math.log(refs[i])-Math.log(Math.max(1,px)));
+    if(ecart<ecartMin){ ecartMin=ecart; meilleur=paliers[i]; }
+  }
+  return meilleur;
+}
+
+/* Graduations « rondes » : vise un écart lisible à l'écran (environ 70 px)
+   entre deux graduations, quelle que soit l'échelle — comme sur une carte. */
+function graduationNette(px){
+  const cible=70/px;
+  const paliers=[0.5,1,2,5,10,15,30,60,120,300,600,900,1800,3600];
+  let meilleur=paliers[0], ecartMin=Infinity;
+  for(const v of paliers){
+    const ecart=Math.abs(Math.log(v)-Math.log(cible));
+    if(ecart<ecartMin){ ecartMin=ecart; meilleur=v; }
+  }
+  return meilleur;
+}
 
 const dureeClips  = () => E.projet.clips.reduce((s,c)=>s+(c.fin-c.debut),0);
 const dureeTotale = () => Math.max(dureeClips(), ...E.projet.audios.map(a=>a.decalage+a.duree), 1);
@@ -565,6 +628,16 @@ function zoomDe(p, avecZoom){
   return p.c.zoomSens==="avant" ? 1+a*p.dans : (1+a)-a*p.dans;
 }
 
+/* Taille du cadre en plein écran : celle des deux dimensions du téléphone qui
+   laisse le 9:16 entier visible, jamais débordant. */
+function tailleFullscreen(){
+  const boite=document.getElementById("tel");
+  if(!boite) return 300;
+  const r=boite.getBoundingClientRect();
+  if(!r.width || !r.height) return 300;
+  return Math.max(120, Math.min(r.height, r.width*16/9));
+}
+
 /* Le balayage repeint ces nœuds au lieu de reconstruire le HTML : c'est ce qui
    fait la différence entre un aperçu qui suit le doigt et un aperçu qui saccade. */
 function apercu(t, opt){
@@ -573,16 +646,50 @@ function apercu(t, opt){
   const sObj = stA(t);
   const s = opt.st!==undefined ? opt.st : (sObj?sObj.texte:null);
   const st = E.projet.style;
-  return `<div class="cadre" style="height:${opt.h||300}px">
+  const plein = !!(opt.fullscreen && E.pleinEcran);
+  const hauteur = plein ? tailleFullscreen() : (opt.h||300);
+  const za = E.zoomAp || {scale:1};
+
+  const bouton = opt.fullscreen
+    ? `<button id="boutonPlein" class="btnPlein" data-act="pleinEcran"
+        aria-label="${plein?"Quitter le plein écran":"Plein écran"}"
+        title="${plein?"Quitter le plein écran":"Plein écran"}">${plein?"✕":"⛶"}</button>`
+    : "";
+  const transportPlein = plein ? `
+    <div class="transportPlein">
+      <button data-act="debut" aria-label="Revenir au début" title="Revenir au début">${icone("debut")}</button>
+      <button class="jouer" data-act="lire" aria-label="${enLecture()?"Pause":"Lire"}"
+        title="${enLecture()?"Pause":"Lire"}">${icone(enLecture()?"pause":"jouer")}</button>
+      <button data-act="fin" aria-label="Aller à la fin" title="Aller à la fin">${icone("fin")}</button>
+    </div>
+    <div class="tps num transportPlein" id="tLectPlein">${tpsD(tL())} / ${tpsD(dureeTotale())}</div>` : "";
+
+  return `<div class="cadre${plein?" pleinEcranActif":""}" style="height:${hauteur}px">
     <div class="neuf16" id="apCadre" style="height:100%">
-      <div class="media" id="apMedia" style="transform:scale(${zoomDe(p,opt.zoom).toFixed(4)})"></div>
-      <div class="plan" id="apPlan" style="transform:scale(${zoomDe(p,opt.zoom).toFixed(4)});transform-origin:50% 45%">${p?("Plan "+(p.i+1)):"—"}</div>
-      <div class="st ${st.police}" id="apSt" style="left:${st.x}%;top:${st.y}%;color:${st.couleur};font-size:${st.taillePct}%;${s?"":"display:none"}">${esc(s||"")}</div>
+      <div class="apZoom" id="apZoom" style="transform:scale(${za.scale})">
+        <div class="media" id="apMedia" style="transform:scale(${zoomDe(p,opt.zoom).toFixed(4)})"></div>
+        <div class="plan" id="apPlan" style="transform:scale(${zoomDe(p,opt.zoom).toFixed(4)});transform-origin:50% 45%">${p?("Plan "+(p.i+1)):"—"}</div>
+        <div class="st ${st.police}" id="apSt" style="left:${st.x}%;top:${st.y}%;color:${st.couleur};font-size:${st.taillePct}%;${s?"":"display:none"}">${esc(s||"")}</div>
+      </div>
       <div class="horloge num" id="apHorloge" style="${opt.horloge?"":"display:none"}">${tpsD(t)}</div>
       ${opt.badge?`<div class="badge">${esc(opt.badge)}</div>`:""}
+      ${bouton}${transportPlein}
     </div></div>`;
 }
 const esc = s => String(s).replace(/[&<>]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+/* Icônes de transport en SVG plutôt qu'en emoji : sur iPhone, les glyphes
+   ⏮⏸▶⏭ s'affichent en couleur quelle que soit la couleur de texte demandée,
+   ce qui jure avec une interface plate et sobre. Le SVG hérite de la couleur
+   du bouton via currentColor, en accord avec la direction visuelle. */
+function icone(nom){
+  const a='width="18" height="18" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true" focusable="false"';
+  if(nom==="debut") return `<svg ${a}><rect x="3" y="3" width="2.4" height="14"/><path d="M17 3.3 L7.2 10 L17 16.7 Z"/></svg>`;
+  if(nom==="fin")   return `<svg ${a}><rect x="14.6" y="3" width="2.4" height="14"/><path d="M3 3.3 L12.8 10 L3 16.7 Z"/></svg>`;
+  if(nom==="jouer") return `<svg ${a}><path d="M5 3 L16.5 10 L5 17 Z"/></svg>`;
+  if(nom==="pause") return `<svg ${a}><rect x="5" y="3" width="3.6" height="14" rx="1"/><rect x="11.4" y="3" width="3.6" height="14" rx="1"/></svg>`;
+  return "";
+}
 
 /* Monte la vraie vidéo du plan courant si elle a été importée ; sinon le
    rectangle numéroté de la maquette. */
@@ -626,21 +733,12 @@ function peindreApercu(t, stForce, avecZoom){
 
 /* ---------- 5. Bande de montage (4.8) ------------------------------------ */
 
-/* « Large » doit tenir sa promesse : voir l'ensemble du projet, quelle que soit
-   sa durée. L'échelle du tableau (7 px/s) est un plafond, pas une valeur fixe :
-   au-delà, elle se resserre juste ce qu'il faut pour que tout entre à l'écran. */
-function echelle(){
-  const p = E.projet.precision;
-  if(p!=="large") return ECH[p];
-  const dispo = (E.largeurBande||330) - 4;
-  return Math.max(1.2, Math.min(ECH.large, dispo/Math.max(dureeTotale(),1)));
-}
 const tetePos = () => E.tete!==null ? E.tete : (E.lecture ? E.lecture.t : null);
 
 function bande(){
   const P=E.projet, ech=echelle(), dur=dureeTotale();
   const W=Math.max(dur*ech, (E.largeurBande||330)-4);
-  const pasG = P.precision==="large" ? (ech<3?30:10) : GRAD[P.precision];
+  const pasG = graduationNette(ech);
 
   let regle="";
   for(let t=0;t<=dur;t+=pasG){
@@ -674,23 +772,34 @@ function bande(){
 
   const tt = tetePos();
   const enT = E.tete!==null ? `Lâchez à ${tpsD(E.tete)}` : (E.lecture ? tpsD(E.lecture.t) : tps(dur));
-  const pasTxt = PAS[P.precision]<1 ? PAS[P.precision]*1000+" ms" : "0,5 s";
-  const vueEnsemble = P.precision==="large" && ech<ECH.large-0.05;
+  const pas = pasContinu(ech);
+  const pasTxt = pas<1 ? Math.round(pas*1000)+" ms" : "0,5 s";
+  const min = echelleMinimale();
+  const vueEnsemble = ech<=min+0.05;
+
+  // Un bouton n'a l'air « actif » que si le pincement n'a pas déjà éloigné
+  // l'échelle de ce préréglage : au-delà d'un petit écart, aucun des trois
+  // n'est plus vraiment vrai, et forcer un affichage serait mentir.
+  const pres = n => {
+    const cible = min * POURCENTAGES[n];
+    return Math.abs(ech-cible)/cible < 0.04;
+  };
 
   return `
-  <div class="bandeEnt"><span class="t">Bande de montage</span><span class="v num" id="bandeT">${enT}</span></div>
-  <div class="defil" id="defil"><div class="piste" style="width:${W}px" id="piste">
-    <div class="regle">${regle}</div>
-    <div class="rang">${clips}</div>
-    ${audios}
-    <div class="rang st">${sst}</div>
-    <div class="tete" id="tete" style="left:0;transform:translateX(${(tt||0)*ech}px);${tt===null?"display:none":""}"></div>
-  </div></div>
-  <div class="prec">
-    ${["large","normal","precis"].map(n=>`<button data-prec="${n}" aria-pressed="${P.precision===n}">${
-      {large:"Large",normal:"Normal",precis:"Précis"}[n]}</button>`).join("")}
-  </div>
-  <div class="pas num">Calage au ${pasTxt} près${vueEnsemble?" · tout le montage à l'écran":""}</div>`;
+  <div class="bandeCadre">
+    <div class="bandeEnt"><span class="t">Bande de montage</span><span class="v num" id="bandeT">${enT}</span></div>
+    <div class="defil" id="defil"><div class="piste" style="width:${W}px" id="piste">
+      <div class="regle">${regle}</div>
+      <div class="rang">${clips}</div>
+      ${audios}
+      <div class="rang st">${sst}</div>
+      <div class="tete" id="tete" style="left:0;transform:translateX(${(tt||0)*ech}px);${tt===null?"display:none":""}"></div>
+    </div></div>
+    <div class="prec">
+      ${[100,50,25].map(n=>`<button data-prec="${n}" aria-pressed="${pres(n)}">${n} %</button>`).join("")}
+    </div>
+    <div class="pas num">Calage au ${pasTxt} près${vueEnsemble?" · tout le montage à l'écran":""}</div>
+  </div>`;
 }
 
 function majTete(t){
@@ -700,33 +809,122 @@ function majTete(t){
   if(ent) ent.textContent=(E.tete!==null?"Lâchez à ":"")+tpsD(t);
 }
 
+/* Repeint la bande à l'échelle courante SANS reconstruire son HTML : c'est ce
+   qui rend le pincement fluide plutôt que saccadé. Un rendu complet (rendre())
+   détruit et recrée toute la piste à chaque frame — imperceptible pour un clic,
+   mais un pincement en déclenche des dizaines par seconde. Ici, on ne touche
+   qu'à ce qui a changé : la largeur des blocs et leur position. */
+function redessinerBandeContinu(){
+  const piste=document.getElementById("piste"); if(!piste) return;
+  const P=E.projet, ech=echelle(), dur=dureeTotale();
+  piste.style.width = Math.max(dur*ech, (E.largeurBande||330)-4)+"px";
+
+  P.clips.forEach((c,i)=>{
+    const el=piste.querySelector('.bloc.clip[data-id="'+c.id+'"]'); if(!el) return;
+    el.style.left=(debutDe(i)*ech)+"px";
+    el.style.width=(Math.max((c.fin-c.debut)*ech,26)-3)+"px";
+  });
+  P.audios.forEach(a=>{
+    const el=piste.querySelector('.bloc.audio[data-id="'+a.id+'"]'); if(!el) return;
+    el.style.left=(a.decalage*ech)+"px";
+    el.style.width=(Math.max(a.duree*ech,40)-3)+"px";
+  });
+  P.sousTitres.forEach(s=>{
+    const el=piste.querySelector('.bloc.sst[data-id="'+s.id+'"]'); if(!el) return;
+    el.style.left=(s.debut*ech)+"px";
+    el.style.width=(Math.max((s.fin-s.debut)*ech,14)-3)+"px";
+  });
+
+  const regle=piste.querySelector(".regle");
+  if(regle){
+    const pasG=graduationNette(ech); let html="";
+    for(let t=0;t<=dur;t+=pasG) html += `<i style="left:${t*ech}px"></i><span style="left:${t*ech+3}px">${tps(t)}</span>`;
+    regle.innerHTML=html;
+  }
+
+  majTete(tetePos()||0);
+
+  const pas=pasContinu(ech);
+  const pasTxt = pas<1 ? Math.round(pas*1000)+" ms" : "0,5 s";
+  const min=echelleMinimale();
+  const pasEl=document.querySelector(".pas");
+  if(pasEl) pasEl.textContent = "Calage au "+pasTxt+" près"+(ech<=min+0.05?" · tout le montage à l'écran":"");
+
+  document.querySelectorAll("[data-prec]").forEach(btn=>{
+    const cible = min * POURCENTAGES[btn.dataset.prec];
+    btn.setAttribute("aria-pressed", Math.abs(ech-cible)/cible<0.04 ? "true":"false");
+  });
+}
+
 const SEUIL_GLISSE = 5;   // px : en deçà, c'est un appui
 const MARGE_AUTO   = 42;  // px : zone de défilement automatique au bord
-const NIVEAUX = ["large","normal","precis"];
 
-function changerPrecision(sens){
-  const i = NIVEAUX.indexOf(E.projet.precision);
-  const j = Math.max(0, Math.min(NIVEAUX.length-1, i+sens));
-  if(j!==i){ E.projet.precision=NIVEAUX[j]; rendre(); }
+/* Un seul doigt fait glisser un bloc ; deux doigts pincent la bande. Les deux
+   gestes utilisent les mêmes événements de pointeur, donc sans coordination
+   explicite le second doigt posé sur un bloc démarre AUSSI un glissement — et
+   c'est exactement ce qui décalait les vidéos et les pistes pendant un pincement.
+   Geste.actifs suit chaque doigt ; dès qu'un deuxième arrive, le glissement en
+   cours est annulé et rien ne peut en redémarrer un tant que les deux doigts
+   ne sont pas complètement relevés. */
+const Geste = { actifs:new Map(), pince:false, dist0:0, glissementCourant:null, raf:null };
+
+function annulerGlissementEnCours(){
+  if(Geste.glissementCourant){ Geste.glissementCourant(); Geste.glissementCourant=null; }
+}
+
+/* Un seul repeint par image, quel que soit le nombre d'événements de
+   pincement reçus entre deux frames : c'est ce qui garde le geste fluide
+   même sur un projet chargé. */
+function planifierRedessinContinu(){
+  if(Geste.raf==null) Geste.raf=requestAnimationFrame(()=>{ Geste.raf=null; redessinerBandeContinu(); });
 }
 
 function brancherGlisse(){
   const piste=document.getElementById("piste"); if(!piste) return;
   const defil=document.getElementById("defil");
   E.largeurBande = defil.clientWidth || E.largeurBande || 330;
+  Geste.glissementCourant=null; // un ancien glissement ne doit pas survivre à un nouveau rendu
+  // Geste.actifs / Geste.pince : volontairement pas réinitialisés ici. Un
+  // changement de niveau de précision redessine la bande EN PLEIN PINCEMENT ;
+  // les deux doigts doivent rester suivis pendant toute la durée du geste.
 
-  /* Pincement sur la bande : passe d'un niveau à l'autre (4.8). */
-  let ecart0=null;
-  const ecartDoigts = e => Math.hypot(
-    e.touches[0].clientX-e.touches[1].clientX, e.touches[0].clientY-e.touches[1].clientY);
-  defil.addEventListener("touchstart",e=>{ if(e.touches.length===2) ecart0=ecartDoigts(e); },{passive:true});
-  defil.addEventListener("touchmove",e=>{
-    if(e.touches.length!==2 || ecart0===null) return;
-    const d=ecartDoigts(e), r=d/ecart0;
-    if(r>1.4){ changerPrecision(1); ecart0=d; }
-    else if(r<0.72){ changerPrecision(-1); ecart0=d; }
-  },{passive:true});
-  defil.addEventListener("touchend",()=>{ ecart0=null; },{passive:true});
+  const distance = ()=>{
+    const pts=[...Geste.actifs.values()];
+    return Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+  };
+
+  /* Capturée sur la bande entière, donc vue avant le gestionnaire posé sur
+     chaque bloc : c'est ce qui permet d'intercepter le deuxième doigt avant
+     qu'il ne déclenche son propre glissement. */
+  defil.addEventListener("pointerdown",e=>{
+    Geste.actifs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(Geste.actifs.size===2){
+      Geste.pince=true;
+      annulerGlissementEnCours();
+      Geste.dist0=distance();
+    }
+  },{capture:true});
+
+  defil.addEventListener("pointermove",e=>{
+    if(!Geste.actifs.has(e.pointerId)) return;
+    Geste.actifs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(Geste.pince && Geste.actifs.size>=2){
+      const d=distance();
+      if(Geste.dist0>0){
+        E.echellePxS = clampEchelle(echelle() * (d/Geste.dist0));
+        planifierRedessinContinu();
+      }
+      Geste.dist0=d;
+      e.stopPropagation();
+    }
+  },{capture:true});
+
+  const relacherPointeur=e=>{
+    Geste.actifs.delete(e.pointerId);
+    if(Geste.actifs.size===0) Geste.pince=false;
+  };
+  defil.addEventListener("pointerup",relacherPointeur,{capture:true});
+  defil.addEventListener("pointercancel",relacherPointeur,{capture:true});
 
   piste.querySelectorAll(".bloc").forEach(b=>{
     const type=b.dataset.type, id=b.dataset.id;
@@ -740,13 +938,14 @@ function brancherGlisse(){
     b.addEventListener("keydown",ev=>{ if(ev.key==="Enter"||ev.key===" "){ ev.preventDefault(); b.click(); } });
 
     b.addEventListener("pointerdown",dep=>{
+      if(Geste.pince || Geste.actifs.size>=2) return; // un pincement est en cours : pas de glissement
       dep.preventDefault();
       vuPointeur=true; setTimeout(()=>{vuPointeur=false;},350);
 
       const ech = echelle();
       const gauche0 = parseFloat(b.style.left)||0;
       const x0 = dep.clientX, scroll0 = defil.scrollLeft;
-      let bouge=false, raf=null, xCourant=x0;
+      let bouge=false, raf=null, xCourant=x0, annule=false;
 
       const obj = type==="audio" ? E.projet.audios.find(a=>a.id===id)
                 : type==="st"    ? E.projet.sousTitres.find(s=>s.id===id) : null;
@@ -759,6 +958,30 @@ function brancherGlisse(){
       const gaucheDe = (tab,k) => tab.slice(0,k).reduce((s,c)=>s+larg(c),0);
 
       try{ b.setPointerCapture(dep.pointerId); }catch(e){}
+
+      /* Si un deuxième doigt se pose pendant ce glissement, Geste appelle ceci
+         immédiatement : on efface tout effet visuel déjà produit (position du
+         bloc, réordonnancement éventuel des clips voisins) et on rend la main
+         au pincement. Le drapeau « annule » ferme la porte même si un
+         événement de pointeur en cours de route arrivait malgré tout. */
+      Geste.glissementCourant = ()=>{
+        annule=true;
+        if(raf!=null){ cancelAnimationFrame(raf); raf=null; }
+        b.removeEventListener("pointermove",bouger);
+        b.removeEventListener("pointerup",finir);
+        b.removeEventListener("pointercancel",finir);
+        try{ b.releasePointerCapture(dep.pointerId); }catch(e){}
+        b.classList.remove("saisi"); b.style.transform="";
+        if(type==="clip"){
+          E.projet.clips.forEach((c,k)=>{
+            const el=piste.querySelector('.bloc.clip[data-id="'+c.id+'"]');
+            if(el) el.style.left=gaucheDe(E.projet.clips,k)+"px";
+          });
+        }
+        E.tete=null;
+        const teteEl=document.getElementById("tete"); if(teteEl) teteEl.style.display="none";
+        peindreApercu(tL());
+      };
 
       const planifier = ()=>{ if(raf==null) raf=requestAnimationFrame(peindre); };
 
@@ -814,6 +1037,7 @@ function brancherGlisse(){
       // Le seuil est franchi dans le gestionnaire lui-même : un geste rapide ne
       // doit pas être pris pour un appui parce que la frame n'est pas encore passée.
       const bouger = e2=>{
+        if(annule) return;
         xCourant=e2.clientX;
         if(!bouge && Math.abs(xCourant-x0+(defil.scrollLeft-scroll0))>=SEUIL_GLISSE){
           bouge=true; b.classList.add("saisi");
@@ -822,6 +1046,8 @@ function brancherGlisse(){
       };
 
       const finir = e2=>{
+        if(annule) return;
+        Geste.glissementCourant=null; // geste terminé normalement, plus rien à annuler
         b.removeEventListener("pointermove",bouger);
         b.removeEventListener("pointerup",finir);
         b.removeEventListener("pointercancel",finir);
@@ -842,7 +1068,7 @@ function brancherGlisse(){
           agir("Déplacement du clip", ()=>{ E.projet.clips = ordre; });
           return;
         }
-        const pas=PAS[E.projet.precision];
+        const pas=pasContinu(ech); // le pas de calage suit l'échelle continue, pas un palier nommé
         const t=Math.max(0, Math.round((base+dx/ech)/pas)*pas);
         const decal=t-base;
         if(Math.abs(decal)<1e-9){ rendre(); return; }
@@ -894,7 +1120,11 @@ function brancherGlisse(){
   }
 
   document.querySelectorAll("[data-prec]").forEach(btn=>{
-    btn.addEventListener("click",()=>{ E.projet.precision=btn.dataset.prec; rendre(); });
+    btn.addEventListener("click",()=>{
+      const n=btn.dataset.prec;
+      E.echellePxS = echelleMinimale() * POURCENTAGES[n];
+      rendre();
+    });
   });
 }
 
@@ -909,12 +1139,12 @@ EC.montage = () => {
   const P=E.projet, nV=P.paragraphes.filter(p=>!p.cale).length;
   return {
     barre:{ g: E.annulations.length?`<button data-act="annuler">Annuler</button>`:"", titre:"Mon montage" },
-    corps:`<div id="zoneApercu">${apercu(tL(),{h:280,horloge:enLecture()})}</div>
+    corps:`<div id="zoneApercu">${apercu(tL(),{h:280,horloge:enLecture(),fullscreen:true})}</div>
       <div class="transport">
-        <button data-act="debut" aria-label="Revenir au début" title="Revenir au début">⏮</button>
+        <button data-act="debut" aria-label="Revenir au début" title="Revenir au début">${icone("debut")}</button>
         <button class="jouer" data-act="lire" aria-label="${enLecture()?"Pause":"Lire"}"
-          title="${enLecture()?"Pause":"Lire"}">${enLecture()?"⏸":"▶"}</button>
-        <button data-act="fin" aria-label="Aller à la fin" title="Aller à la fin">⏭</button>
+          title="${enLecture()?"Pause":"Lire"}">${icone(enLecture()?"pause":"jouer")}</button>
+        <button data-act="fin" aria-label="Aller à la fin" title="Aller à la fin">${icone("fin")}</button>
         <span class="tps" id="tLect">${tpsD(tL())} / ${tpsD(dureeTotale())}</span>
       </div>${bande()}
       <div style="padding:0 var(--marge)">
@@ -1106,7 +1336,7 @@ EC.editST = () => {
 EC.apparence = () => {
   const st=E.projet.style;
   const ex = E.projet.sousTitres[0] ? E.projet.sousTitres[0].texte : "Le boulanger relève son rideau";
-  const cs=[["#FFFFFF","blanc"],["#F2C14E","jaune"],["#14140F","noir"],["#E4572E","accent"]];
+  const cs=[["#FFFFFF","blanc"],["#F2C14E","jaune"],["#14140F","noir"],["#0B7D70","accent"]];
   return {
     barre:{g:`<button data-act="retour">Retour</button>`,titre:"Apparence"},
     corps:`<div id="zoneAppar">${apercu(0,{h:300,st:ex,zoom:false,badge:"Taille "+niveauTaille()+" sur 6"})}</div>
@@ -1167,6 +1397,8 @@ function rendre(anim){
   if(document.getElementById("apMedia")) monterMedia(E.lecture?E.lecture.t:0);
   if(nom==="montage"||nom==="verif") brancherGlisse();
   if(nom==="apparence") brancherPlacement();
+  // Le pincement du montage lui-même n'existe qu'une fois le plein écran actif.
+  if(E.pleinEcran && document.getElementById("boutonPlein")) brancherPinceApercu();
 }
 
 function brancher(){
@@ -1336,8 +1568,12 @@ function acte(a){
     });
   }
 
-  if(nom==="debut"){ arreterLecture(); E.lecture={t:0}; return rendre(); }
-  if(nom==="fin"){ arreterLecture(); E.lecture={t:Math.max(0,dureeTotale()-0.05)}; return rendre(); }
+  if(nom==="pleinEcran"){
+    E.pleinEcran=!E.pleinEcran; E.zoomAp={scale:1}; // le pincement ne survit pas à l'entrée/sortie
+    return rendre();
+  }
+  if(nom==="debut"){ arreterLecture(); E.lecture={t:0}; rendre(); assurerVisible("debut"); return; }
+  if(nom==="fin"){ arreterLecture(); E.lecture={t:Math.max(0,dureeTotale()-0.05)}; rendre(); assurerVisible("fin"); return; }
   if(nom==="lire"||nom==="lecture"){
     if(enLecture()) arreterLecture();
     else { if(!E.lecture||E.lecture.t>=dureeTotale()-0.05) E.lecture={t:0}; lancerLecture(); }
@@ -1432,6 +1668,20 @@ function arreterMedias(){
   for(const id in MEDIA.videos){ const v=MEDIA.videos[id]; if(!v.paused) v.pause(); }
 }
 
+/* La bande doit suivre les trois commandes de lecture, pas juste la tête qui
+   avance dans le vide : un rendu complet recrée #defil à scrollLeft=0, donc
+   sans ceci « Aller à la fin » laisse le début affiché pendant que la tête
+   de lecture est hors champ, loin à droite. */
+function assurerVisible(cible){
+  const defil=document.getElementById("defil"), piste=document.getElementById("piste");
+  if(!defil||!piste) return;
+  if(cible==="debut"){ defil.scrollLeft=0; return; }
+  if(cible==="fin"){ defil.scrollLeft=Math.max(0, piste.scrollWidth-defil.clientWidth); return; }
+  const x=cible*echelle(), marge=40;
+  if(x < defil.scrollLeft+marge) defil.scrollLeft=Math.max(0,x-marge);
+  else if(x > defil.scrollLeft+defil.clientWidth-marge) defil.scrollLeft=x-defil.clientWidth+marge;
+}
+
 function lancerLecture(){
   arreterLecture();
   if(!E.lecture) E.lecture={t:0};
@@ -1447,8 +1697,11 @@ function lancerLecture(){
     synchroniserMedias(E.lecture.t);
     peindreApercu(E.lecture.t);
     majTete(E.lecture.t);
+    assurerVisible(E.lecture.t);
     const l=document.getElementById("tLect");
     if(l) l.textContent = tpsD(E.lecture.t)+" / "+tpsD(fin);
+    const l2=document.getElementById("tLectPlein");
+    if(l2) l2.textContent = tpsD(E.lecture.t)+" / "+tpsD(fin);
     E.lecture.raf = requestAnimationFrame(boucle);
   };
   E.lecture.raf = requestAnimationFrame(boucle);
@@ -1479,6 +1732,44 @@ function brancherPlacement(){
     const finir=()=>{ t.removeEventListener("pointermove",bouger); t.removeEventListener("pointerup",finir); };
     t.addEventListener("pointermove",bouger); t.addEventListener("pointerup",finir);
   });
+}
+
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape" && E.pleinEcran){ E.pleinEcran=false; E.zoomAp={scale:1}; rendre(); }
+});
+
+/* ---------- Pincement du montage lui-même : uniquement en plein écran ---- */
+const GesteAp = { actifs:new Map(), dist0:0 };
+
+function brancherPinceApercu(){
+  const cadre=document.getElementById("apCadre"); if(!cadre) return;
+  GesteAp.actifs.clear();
+  const distance=()=>{
+    const pts=[...GesteAp.actifs.values()];
+    return Math.hypot(pts[0].x-pts[1].x, pts[0].y-pts[1].y);
+  };
+  cadre.addEventListener("pointerdown",e=>{
+    GesteAp.actifs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(GesteAp.actifs.size===2) GesteAp.dist0=distance();
+  });
+  cadre.addEventListener("pointermove",e=>{
+    if(!GesteAp.actifs.has(e.pointerId)) return;
+    GesteAp.actifs.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(GesteAp.actifs.size===2 && GesteAp.dist0>0){
+      const d=distance();
+      const echelleNouvelle = Math.max(1, Math.min(3, (E.zoomAp.scale||1) * (d/GesteAp.dist0)));
+      GesteAp.dist0=d;
+      E.zoomAp.scale=echelleNouvelle;
+      const z=document.getElementById("apZoom");
+      if(z) z.style.transform="scale("+echelleNouvelle.toFixed(3)+")";
+    }
+  });
+  const relacher=e=>{
+    GesteAp.actifs.delete(e.pointerId);
+    if(GesteAp.actifs.size<2) GesteAp.dist0=0;
+  };
+  cadre.addEventListener("pointerup",relacher);
+  cadre.addEventListener("pointercancel",relacher);
 }
 
 /* ---------- démarrage ---------------------------------------------------- */
