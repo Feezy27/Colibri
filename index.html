@@ -612,11 +612,43 @@ function choisirFichier(accept, multiple, cb){
   }catch(e){ toast("Sélecteur de fichiers indisponible."); }
 }
 
-async function analyserAudio(file){
-  ctxAudio = ctxAudio || new (window.AudioContext||window.webkitAudioContext)();
-  if(ctxAudio.state==="suspended") await ctxAudio.resume();
-  const brut = await file.arrayBuffer();
-  const buf  = await ctxAudio.decodeAudioData(brut.slice(0));
+/* Rejette si la promesse n'aboutit pas à temps : sans cela, la moindre
+   opération qui ne se résout jamais fige l'écran de progression pour de bon. */
+function avecDelai(promesse, ms, message){
+  let t;
+  return Promise.race([
+    Promise.resolve(promesse).finally(()=>clearTimeout(t)),
+    new Promise((_,rej)=>{ t=setTimeout(()=>rej(new Error(message)), ms); }),
+  ]);
+}
+
+/* Décode un fichier vers une enveloppe, sans jamais dépendre d'un geste
+   utilisateur. Un AudioContext naît « suspendu » sur iOS et son resume() ne
+   se résout qu'avec un geste actif — après le sélecteur de fichiers, ce geste
+   a expiré, et l'attente ne se terminait jamais. Un OfflineAudioContext
+   décode sans rien démarrer, donc sans ce piège. */
+async function analyserAudio(file, surEtape){
+  if(surEtape) surEtape("Lecture du fichier");
+  const brut = await avecDelai(file.arrayBuffer(), 60000, "lecture trop longue");
+
+  if(surEtape) surEtape("Décodage de la piste audio");
+  const OAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+  const AC  = window.AudioContext || window.webkitAudioContext;
+  let decodeur;
+  if(OAC){ decodeur = new OAC(1, 1, 44100); }
+  else { decodeur = ctxAudio = ctxAudio || new AC(); } // repli, sans resume()
+
+  const buf = await avecDelai(new Promise((res,rej)=>{
+    let fini=false;
+    const ok=b=>{ if(!fini && b){ fini=true; res(b); } };
+    const ko=e=>{ if(!fini){ fini=true; rej(e || new Error("format non décodable")); } };
+    let p;
+    try{ p = decodeur.decodeAudioData(brut.slice(0), ok, ko); }
+    catch(e){ return ko(e); }
+    if(p && p.then) p.then(ok, ko); // Safari récent renvoie aussi une promesse
+  }), 90000, "décodage trop long");
+
+  if(surEtape) surEtape("Repérage des silences");
   const n=buf.length, ch=buf.numberOfChannels;
   const pcm=new Float32Array(n);
   for(let c=0;c<ch;c++){ const d=buf.getChannelData(c); for(let i=0;i<n;i++) pcm[i]+=d[i]/ch; }
@@ -1592,7 +1624,9 @@ EC.autoMedias = () => {
 };
 
 EC.autoEnCours = () => ({
-  barre:{titre:"Montage en cours…"},
+  // Même règle que pour le calage : un écran de progression sans issue est un
+  // piège. Sur un fichier lourd ou illisible, il faut pouvoir sortir.
+  barre:{g:`<button data-act="stopAuto">Annuler</button>`, titre:"Montage en cours…"},
   corps:`<div style="padding-top:120px"><div class="jauge"><i id="jaugeAuto"></i></div>
     <div class="legende" id="jaugeAutoTxt">Analyse de la voix</div></div>`,
 });
@@ -1832,17 +1866,17 @@ function acte(a){
   }
 
   if(nom==="ajouterSon"){
-    choisirFichier("audio/*,.m4a,.mp3,.wav,.aac,.ogg", false, async file=>{
+    choisirFichier("audio/*,video/*,.m4a,.mp3,.wav,.aac,.ogg,.mp4,.mov", false, async file=>{
       toast("Analyse de « "+file.name+" »…");
       try{
-        const {env,duree} = await analyserAudio(file);
+        const {env,duree} = await analyserAudio(file, e=>toast(e+"…"));
         const id="a"+Date.now();
         MEDIA.sons[id] = Object.assign(new Audio(URL.createObjectURL(file)),{preload:"auto"});
         agir("Ajout d'une bande son",()=>{
           P.audios.push({id,nom:file.name,duree,dureeSource:duree,debut:0,decalage:0,env,url:true});
           E.toastEnAttente = file.name+" ajouté, "+tpsD(duree)+".";
         });
-      }catch(e){ toast("Ce fichier audio n'a pas pu être lu."); }
+      }catch(e){ toast("Fichier illisible : "+(e && e.message ? e.message : "format non reconnu")+"."); }
     });
     return;
   }
@@ -1900,15 +1934,29 @@ function acte(a){
     return rendre();
   }
   if(nom==="quitterAuto"){ E.auto=null; E.pile=["montage"]; return rendre(true); }
+  if(nom==="stopAuto"){
+    E.autoAbandonne=true; // l'analyse en cours ne doit plus rien afficher
+    E.pile = (E.auto && E.auto.sequences) ? ["montage","autoMedias"] : ["montage","autoTexte"];
+    return rendre();
+  }
 
   if(nom==="autoChoisirSon"){
     const txt = (E.auto && E.auto.texte) || "";
     if(!txt.trim()){ toast("Collez d'abord votre texte."); return; }
-    choisirFichier("audio/*,.m4a,.mp3,.wav,.aac,.ogg", false, async file=>{
+    // Une vidéo est acceptée : seule sa piste audio est analysée.
+    choisirFichier("audio/*,video/*,.m4a,.mp3,.wav,.aac,.ogg,.mp4,.mov", false, async file=>{
+      E.autoAbandonne=false;
       E.pile.push("autoEnCours"); rendre();
-      const j=document.getElementById("jaugeAuto"); if(j) j.style.width="35%";
+      let pct=15;
+      const etape = libelle=>{
+        if(E.autoAbandonne) return;
+        pct=Math.min(85,pct+25);
+        const j=document.getElementById("jaugeAuto"); if(j) j.style.width=pct+"%";
+        const t=document.getElementById("jaugeAutoTxt"); if(t) t.textContent=libelle;
+      };
       try{
-        const {env,duree} = await analyserAudio(file);
+        const {env,duree} = await analyserAudio(file, etape);
+        if(E.autoAbandonne) return; // l'utilisateur est parti : ne rien imposer
         const sq = sequencerAudio(env);
         const id="a"+Date.now();
         MEDIA.sons[id]=Object.assign(new Audio(URL.createObjectURL(file)),{preload:"auto"});
@@ -1918,8 +1966,9 @@ function acte(a){
         });
         E.pile=["montage","autoMedias"]; rendre();
       }catch(e){
+        if(E.autoAbandonne) return;
         E.pile=["montage","autoTexte"]; rendre();
-        toast("Ce fichier audio n'a pas pu être lu.");
+        toast("Fichier illisible : "+(e && e.message ? e.message : "format non reconnu")+".");
       }
     });
     return;
