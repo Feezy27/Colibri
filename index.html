@@ -75,11 +75,15 @@
   .cadre.pleinEcranActif{position:absolute;inset:0;z-index:55;border-radius:0}
   .neuf16{aspect-ratio:9/16;position:relative;overflow:hidden;background:var(--image)}
   .apZoom{position:absolute;inset:0;transform-origin:50% 50%}
-  .btnPlein{position:absolute;bottom:10px;right:10px;width:38px;height:38px;border:0;border-radius:8px;
+  .btnPlein{position:absolute;bottom:10px;right:10px;width:46px;height:46px;border:0;border-radius:10px;z-index:9;
     background:rgba(20,20,15,.55);color:#fff;font-size:17px;line-height:1;cursor:pointer;
     display:flex;align-items:center;justify-content:center;touch-action:manipulation}
+  /* Ce conteneur est pleine largeur : sans pointer-events:none il recouvrait
+     la croix du plein écran et interceptait les appuis dans tout le bas de
+     l'écran. Seuls ses boutons doivent être cliquables. */
   .transportPlein{position:absolute;left:0;right:0;bottom:14px;display:flex;align-items:center;
-    justify-content:center;gap:10px;touch-action:manipulation}
+    justify-content:center;gap:10px;touch-action:manipulation;pointer-events:none}
+  .transportPlein button{pointer-events:auto}
   .transportPlein button{flex:none;width:52px;height:48px;border:0;border-radius:12px;
     background:rgba(20,20,15,.55);color:#fff;font-size:17px;display:flex;align-items:center;justify-content:center;cursor:pointer}
   .transportPlein button.jouer{width:66px;font-size:19px}
@@ -840,8 +844,22 @@ function tpsD(s){ s=Math.max(0,s); const m=Math.floor(s/60); const r=(s-m*60);
   return m+":"+String(Math.floor(r)).padStart(2,"0")+"."+Math.floor((r%1)*10); }
 
 /* Une action = une entrée d'annulation, quel que soit ce qu'elle produit. */
+/* L'enveloppe d'un audio est un tableau de plusieurs milliers de valeurs. La
+   sérialiser à chaque action coûtait cher sur un fichier long — et JSON la
+   transformait en objet ordinaire, si bien qu'une annulation la rendait
+   inutilisable. On la conserve donc par référence : elle ne change jamais
+   une fois calculée. */
+function instantane(P){
+  const audios = P.audios.map(a=>{
+    const {env, ...reste} = a;
+    return Object.assign(JSON.parse(JSON.stringify(reste)), {env});
+  });
+  const {audios:_ignore, ...reste} = P;
+  return Object.assign(JSON.parse(JSON.stringify(reste)), {audios});
+}
+
 function agir(libelle, fn){
-  E.annulations.push({libelle, etat:JSON.parse(JSON.stringify(E.projet))});
+  E.annulations.push({libelle, etat:instantane(E.projet)});
   if(E.annulations.length>40) E.annulations.shift();
   fn();
   if(E.toastEnAttente){ const m=E.toastEnAttente; E.toastEnAttente=null; toast(m); return; }
@@ -900,6 +918,13 @@ function apercu(t, opt){
   const st = E.projet.style;
   const plein = !!(opt.fullscreen && E.pleinEcran);
   const hauteur = plein ? tailleFullscreen() : (opt.h||300);
+  /* taillePct est un pourcentage de la LARGEUR DE L'IMAGE. En CSS, une
+     font-size en pourcentage se calcule sur la police héritée, pas sur la
+     largeur : « 5% » donnait 5 % de 17 px, soit moins d'un pixel — les
+     sous-titres étaient bien rendus, mais invisibles. On convertit donc en
+     pixels à partir de la largeur réelle du cadre 9:16. */
+  const largeurCadre = hauteur*9/16;
+  const stPx = (E.projet.style.taillePct/100)*largeurCadre;
   const za = E.zoomAp || {scale:1};
 
   const bouton = opt.fullscreen
@@ -921,7 +946,7 @@ function apercu(t, opt){
       <div class="apZoom" id="apZoom" style="transform:scale(${za.scale})">
         <div class="media" id="apMedia" style="transform:scale(${zoomDe(p,opt.zoom).toFixed(4)})"></div>
         <div class="plan" id="apPlan" style="transform:scale(${zoomDe(p,opt.zoom).toFixed(4)});transform-origin:50% 45%">${p?("Plan "+(p.i+1)):"—"}</div>
-        <div class="st ${st.police}" id="apSt" style="left:${st.x}%;top:${st.y}%;color:${st.couleur};font-size:${st.taillePct}%;${s?"":"display:none"}">${esc(s||"")}</div>
+        <div class="st ${st.police}" id="apSt" style="left:${st.x}%;top:${st.y}%;color:${st.couleur};font-size:${stPx.toFixed(2)}px;${s?"":"display:none"}">${esc(s||"")}</div>
       </div>
       <div class="horloge num" id="apHorloge" style="${opt.horloge?"":"display:none"}">${tpsD(t)}</div>
       ${opt.badge?`<div class="badge">${esc(opt.badge)}</div>`:""}
@@ -947,6 +972,36 @@ function icone(nom){
 
 /* Monte la vraie vidéo du plan courant si elle a été importée ; sinon le
    rectangle numéroté de la maquette. */
+/* iOS n'autorise le démarrage d'une vidéo que pendant un geste utilisateur.
+   Une vidéo montée plus tard, au changement de plan, refuse donc de jouer :
+   écran noir jusqu'à ce qu'on touche l'écran. On les « débloque » toutes au
+   moment où l'utilisateur appuie sur Lire, en les démarrant puis les
+   arrêtant aussitôt, sans un son. */
+function amorcerVideos(){
+  for(const id in MEDIA.videos){
+    const v=MEDIA.videos[id];
+    if(v.__amorcee) continue;
+    const muetAvant=v.muted;
+    v.muted=true;
+    try{
+      const p=v.play();
+      if(p && p.then) p.then(()=>{ try{v.pause();}catch(e){} v.muted=muetAvant; v.__amorcee=true; }).catch(()=>{});
+      else { try{v.pause();}catch(e){} v.muted=muetAvant; v.__amorcee=true; }
+    }catch(e){}
+  }
+}
+
+/* Prépare le plan suivant pendant que le courant joue : sans cela, le
+   changement de plan tombe sur une vidéo qui n'a encore aucune image
+   décodée, d'où le noir. */
+function preparerSuivant(t){
+  const p=planA(t); if(!p) return;
+  const suivant=E.projet.clips[p.i+1]; if(!suivant) return;
+  const v=MEDIA.videos[suivant.id]; if(!v) return;
+  if(v.readyState<2){ try{ v.load(); }catch(e){} return; }
+  if(Math.abs(v.currentTime-suivant.debut)>0.5){ try{ v.currentTime=suivant.debut; }catch(e){} }
+}
+
 function monterMedia(t, avecZoom){
   const cadre=document.getElementById("apMedia"); if(!cadre) return null;
   const p=planA(t);
@@ -957,9 +1012,20 @@ function monterMedia(t, avecZoom){
   if(el!==actuel){ if(actuel) actuel.remove(); if(el) cadre.appendChild(el); }
   if(v && p){
     const local = p.c.debut + p.dans*(p.c.fin-p.c.debut);
-    try{ if(!enLecture() || Math.abs(v.currentTime-local)>0.3) v.currentTime=local; }catch(e){}
+    /* Pendant la lecture, la vidéo avance d'elle-même : la recaler à chaque
+       image relance un décodage complet et fige les fichiers un peu lourds.
+       On ne corrige que les dérives franches, et jamais plus de deux fois
+       par seconde. */
+    const maintenant = (typeof performance!=="undefined"?performance.now():Date.now());
+    if(!enLecture()){
+      try{ if(Math.abs(v.currentTime-local)>0.05) v.currentTime=local; }catch(e){}
+    } else if(Math.abs(v.currentTime-local)>0.6 && maintenant-(v.__dernierRecalage||0)>500){
+      v.__dernierRecalage=maintenant;
+      try{ v.currentTime=local; }catch(e){}
+    }
     if(enLecture() && v.paused) { const j=v.play(); if(j&&j.catch) j.catch(()=>{}); }
     if(!enLecture() && !v.paused) v.pause();
+    if(enLecture()) preparerSuivant(t);
   }
   for(const id in MEDIA.videos){ const o=MEDIA.videos[id]; if(o!==v && !o.paused) o.pause(); }
   cadre.style.transform="scale("+zoomDe(p,avecZoom).toFixed(4)+")";
@@ -2204,6 +2270,9 @@ function acte(a){
             clips.push({id,nom:m.nom,debut:0,fin:besoin,finMax:besoin,
               zoomAmplitude:10,zoomSens: i%2 ? "arriere":"avant"});
           } else {
+            // Illustration d'une voix off : le son du média doublerait la
+            // récitation. Les vidéos importées à la main gardent le leur.
+            m.el.muted=true;
             MEDIA.videos[id]=m.el;
             const garde=Math.min(m.duree,besoin);
             if(m.duree<besoin-0.05)
@@ -2244,6 +2313,7 @@ function acte(a){
   if(nom==="debut"){ arreterLecture(); E.lecture={t:0}; rendre(); assurerVisible("debut"); return; }
   if(nom==="fin"){ arreterLecture(); E.lecture={t:Math.max(0,dureeTotale()-0.05)}; rendre(); assurerVisible("fin"); return; }
   if(nom==="lire"||nom==="lecture"){
+    amorcerVideos(); // cet appui est le seul moment où iOS l'autorise
     if(enLecture()) arreterLecture();
     else { if(!E.lecture||E.lecture.t>=dureeTotale()-0.05) E.lecture={t:0}; lancerLecture(); }
     return rendre();
