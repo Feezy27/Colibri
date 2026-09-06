@@ -94,11 +94,21 @@
   .neuf16 .media{position:absolute;inset:0;transform-origin:50% 45%;overflow:hidden;background:var(--encre)}
   .neuf16 .media:empty{display:none}
   .neuf16 .media video,.neuf16 .media img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+  /* Le contour est composé de huit ombres portées en em plutôt que d'un
+     -webkit-text-stroke : le tracé natif ronge l'intérieur du glyphe si
+     paint-order n'est pas géré, ce qui est le cas de plusieurs Safari.
+     En em, l'épaisseur suit automatiquement la taille du texte.
+     Note : le §4.7 excluait tout contour ; changement demandé. */
   .st{position:absolute;transform:translate(-50%,-100%);text-align:center;
-    color:#fff;text-shadow:0 1px 3px rgba(0,0,0,.75);line-height:1.18;white-space:pre-line;
-    pointer-events:none;font-weight:600;max-width:84%}
+    color:#fff;line-height:1.12;white-space:pre-line;pointer-events:none;
+    font-weight:800;text-transform:uppercase;letter-spacing:-.01em;max-width:84%;
+    text-shadow:
+      .055em 0 0 #14140F, -.055em 0 0 #14140F, 0 .055em 0 #14140F, 0 -.055em 0 #14140F,
+      .039em .039em 0 #14140F, -.039em .039em 0 #14140F,
+      .039em -.039em 0 #14140F, -.039em -.039em 0 #14140F,
+      0 .05em .09em rgba(0,0,0,.45)}
   .st.serif{font-family:Georgia,"Times New Roman",serif}
-  .st.grasse{font-weight:800;letter-spacing:-.5px}
+  .st.grasse{font-weight:900;letter-spacing:-.02em}
   .horloge{position:absolute;top:8px;right:10px;background:rgba(20,20,15,.72);color:#fff;
     font:600 13px/1 inherit;padding:5px 7px;border-radius:6px}
 
@@ -256,10 +266,10 @@ function mesure(txt,px){
 const COUT_LIGNE=12, COUT_OUTIL=400, B_FORTE=-14, B_FAIBLE=-8, POIDS=9;
 
 /** Découpage optimal : toutes les coupures évaluées, jamais de remplissage glouton. */
-function decouperLignes(para, taillePct, largeurImage, maxMots){
+function decouperLignes(para, taillePct, largeurImage, maxMots, facteurLargeur){
   const M = mots(para); const n = M.length; if(!n) return [];
   const px  = taillePct/100*largeurImage;
-  const max = largeurImage*.84;
+  const max = largeurImage*.84*(facteurLargeur||1);
   const L = [];
   for(let i=0;i<n;i++){ L[i]=[]; for(let j=i+1;j<=n;j++) L[i][j]=mesure(M.slice(i,j).join(" "),px); }
 
@@ -494,8 +504,21 @@ function regenerer(){
    Séquençage par les silences structurants, sous-titres à 7 mots maximum
    coupés aux phrases, et assemblage des médias sur les séquences. */
 
-const MOTS_MAX_ST = 7;      // plafond dur, demandé
-const SILENCE_MIN_SEQ = 0.5; // en deçà, c'est une respiration, pas une transition
+const MOTS_MAX_ST = 6;      // plafond dur, demandé
+/* Distinguer respiration et transition : deux essais d'adaptation automatique
+   ont échoué sur de vrais enregistrements, chacun dans un sens différent.
+   - Seuil relatif à la médiane : rejetait tout dès que les transitions se
+     ressemblaient entre elles (médiane proche du max -> seuil trop haut).
+   - Plus grand écart relatif entre pauses triées : avec seulement 4 à 6
+     pauses, la variation naturelle d'une voix humaine produit presque
+     toujours UN écart quelque part, même entre des pauses de même nature —
+     ce qui coupait au milieu d'un groupe de transitions pourtant voulues.
+   Avec un échantillon aussi petit, aucune détection « intelligente » n'est
+   fiable : elle devine sur trop peu de données. Un seuil fixe, jamais montré
+   à l'utilisateur, est plus prévisible. Une respiration normale en récitant
+   dépasse rarement 0,5 s ; une pause volontaire pour marquer un changement de
+   séquence la dépasse largement. 0,8 s sépare les deux sans ambiguïté. */
+const SEUIL_TRANSITION = 0.8;
 
 /* Un silence « structurant » sépare deux séquences ; une respiration interne
    non. On les distingue par leur durée relative aux autres pauses du même
@@ -513,30 +536,13 @@ function sequencerAudio(env){
   // Seules comptent les pauses situées entre le premier et le dernier mot :
   // le blanc initial et le blanc final ne sont pas des transitions.
   const internes = toutes.filter(p=>p.debut>debutVoix+0.05 && p.fin<finVoix-0.05);
-  /* Distinguer respiration et transition. Un seuil relatif à la médiane
-     échoue dès que TOUS les silences sont structurants : deux pauses de 0,9 s
-     donnent une médiane de 0,9 et un seuil qui les rejette toutes les deux.
-     On cherche donc une vraie rupture dans la distribution des durées : s'il
-     existe un écart net entre les courtes et les longues, il sépare les deux
-     familles ; sinon, elles sont toutes de même nature et seul le plancher
-     absolu s'applique. */
-  let seuilStruct = SILENCE_MIN_SEQ;
-  if(internes.length>=2){
-    const durees = internes.map(p=>p.fin-p.debut).sort((a,b)=>a-b);
-    let meilleur=1, coupure=-1;
-    for(let i=0;i<durees.length-1;i++){
-      const r = durees[i+1]/Math.max(durees[i],1e-6);
-      if(r>meilleur){ meilleur=r; coupure=i; }
-    }
-    if(meilleur>=1.6) seuilStruct = Math.max(SILENCE_MIN_SEQ, durees[coupure+1]);
-  }
-  const silences = internes.filter(p=>p.fin-p.debut>=seuilStruct);
+  const silences = internes.filter(p=>p.fin-p.debut>=SEUIL_TRANSITION-1e-9);
 
   const sequences=[]; let t=debutVoix;
   for(const sil of silences){ sequences.push({debut:t, fin:sil.debut}); t=sil.fin; }
   sequences.push({debut:t, fin:finVoix});
 
-  return {sequences, silences, pauses:toutes, debutVoix, finVoix, seuilStruct};
+  return {sequences, silences, pauses:toutes, debutVoix, finVoix, seuilStruct:SEUIL_TRANSITION};
 }
 
 /* Découpe en phrases sans lookbehind (non supporté par les Safari anciens). */
@@ -555,45 +561,74 @@ function phrases(texte){
 /* Un sous-titre ne franchit jamais une fin de phrase : on découpe phrase par
    phrase, puis à l'intérieur avec le même choix optimal de coupure que le
    reste de l'application, sous plafond de 7 mots. */
+/* Deux découpes successives, à ne pas confondre :
+   1. le texte est groupé en SOUS-TITRES d'au plus 6 mots, jamais à cheval
+      sur deux phrases ;
+   2. chaque sous-titre est ensuite réparti sur une ou DEUX LIGNES d'affichage,
+      comme dans la référence (« ME POSER ET » / « M'ÉTENDRE, »).
+   Le saut de ligne est explicite : sans lui, le navigateur couperait où il
+   veut, y compris après un mot-outil. */
+const FACTEUR_SOUS_TITRE = 2.2; // un sous-titre vaut environ deux lignes
+
 function sousTitresDuTexte(texte, taillePct, largeurImage){
   const out=[];
   for(const ph of phrases(texte)){
-    for(const l of decouperLignes(ph, taillePct, largeurImage, MOTS_MAX_ST)) out.push(l);
+    const unites = decouperLignes(ph, taillePct, largeurImage, MOTS_MAX_ST, FACTEUR_SOUS_TITRE);
+    for(const u of unites){
+      const lignes = decouperLignes(u, taillePct, largeurImage);
+      out.push(lignes.join("\n"));
+    }
   }
   return out;
 }
 
-/* Répartition syllabique sur le temps de parole, puis respect strict des
-   silences : aucun sous-titre ne doit rester affiché pendant un blanc. */
-function calerSousTitresAuto(textes, pauses, dureeVoix, decalage){
+/* Les sous-titres s'enchaînent sans respiration à l'intérieur d'une séquence :
+   la fin de l'un est le début du suivant. Le seul blanc est celui des silences
+   qui séparent deux séquences — ceux-là servent de transition, et l'écran doit
+   y rester vide. On affecte donc chaque sous-titre à une séquence, puis on
+   répartit à l'intérieur, de bout en bout. */
+function calerSousTitresAuto(textes, pauses, dureeVoix, decalage, sequences){
   if(!textes.length) return [];
   const P = parole(pauses, dureeVoix);
   const syl = textes.map(t=>Math.max(1,syllabes(t)));
   const tot = syl.reduce((a,b)=>a+b,0);
 
-  const bornes=[P.seg.length?P.seg[0].debut:0];
-  let cum=0;
-  for(let i=0;i<textes.length;i++){ cum+=syl[i]; bornes.push(versReel(P, cum/tot*P.total)); }
+  const seqs = (sequences && sequences.length) ? sequences : [{
+    debut: P.seg.length?P.seg[0].debut:0,
+    fin:   P.seg.length?P.seg[P.seg.length-1].fin:dureeVoix,
+  }];
 
-  const longues = pauses.filter(p=>p.fin-p.debut>0.28);
-  const out=[];
+  // Affectation proportionnelle à la durée de chaque séquence : on coupe le
+  // texte là où le temps de parole bascule d'une séquence à la suivante.
+  const durees = seqs.map(s=>Math.max(0.01, s.fin-s.debut));
+  const totalD = durees.reduce((a,b)=>a+b,0);
+  const bornes=[]; let acc=0;
+  for(let k=0;k<seqs.length-1;k++){ acc+=durees[k]/totalD*tot; bornes.push(acc); }
+
+  const groupes = seqs.map(()=>[]);
+  let cumul=0, k=0;
   for(let i=0;i<textes.length;i++){
-    let d=bornes[i], f=bornes[i+1];
-    const pr=pauseProche(pauses,f,0.32); if(pr && pr.debut>=d) f=pr.debut;
-    for(const q of longues){
-      if(d>q.debut && d<q.fin) d=q.fin;
-      if(f>q.debut && f<q.fin) f=q.debut;
-      if(q.debut>=d && q.fin<=f) f=q.debut;
-    }
-    f=Math.max(f,d);
-    if(f-d<0.08){ // ne jamais rallonger à l'intérieur d'un silence
-      let plafond=d+0.08;
-      for(const q of longues) if(q.debut>=d && q.debut<plafond) plafond=q.debut;
-      f=Math.max(f,plafond);
-    }
-    out.push({debut:d+decalage, fin:f+decalage, texte:textes[i]});
+    const milieu = cumul + syl[i]/2;
+    while(k<bornes.length && milieu>bornes[k]) k++;
+    groupes[k].push(i);
+    cumul += syl[i];
   }
-  for(let i=1;i<out.length;i++) if(out[i].debut<out[i-1].fin) out[i].debut=out[i-1].fin;
+
+  const out=[];
+  seqs.forEach((sq,idx)=>{
+    const membres=groupes[idx];
+    if(!membres.length) return;
+    const sylLocal = membres.map(i=>syl[i]);
+    const totLocal = sylLocal.reduce((a,b)=>a+b,0);
+    const span = sq.fin-sq.debut;
+    let cur=0;
+    membres.forEach((i,rang)=>{
+      const d = sq.debut + (cur/totLocal)*span;
+      cur += sylLocal[rang];
+      const f = sq.debut + (cur/totLocal)*span;
+      out.push({debut:d+decalage, fin:f+decalage, texte:textes[i]});
+    });
+  });
   return out;
 }
 
@@ -778,7 +813,7 @@ const E = {
       {id:"a2",nom:"ambiance-rue.wav (démo)",duree:22.4,dureeSource:22.4,debut:0,decalage:2.0,env:ENV_DEMO2,url:null},
     ],
     sousTitres:[], paragraphes:[], texteSource:"", voixOffId:null,
-    style:{couleur:"#FFFFFF",police:"sans",taillePct:5,x:50,y:88},
+    style:{couleur:"#FFFFFF",police:"sans",taillePct:7,x:50,y:84},
     precision:"normal",
   },
   pauses:[], compteRendu:null,
@@ -2268,7 +2303,7 @@ function acte(a){
             MEDIA.images[id]=m.el;
             // Zoom lent systématique : une image figée décroche l'attention.
             clips.push({id,nom:m.nom,debut:0,fin:besoin,finMax:besoin,
-              zoomAmplitude:10,zoomSens: i%2 ? "arriere":"avant"});
+              zoomAmplitude:15,zoomSens: i%2 ? "arriere":"avant"});
           } else {
             // Illustration d'une voix off : le son du média doublerait la
             // récitation. Les vidéos importées à la main gardent le leur.
@@ -2289,10 +2324,10 @@ function acte(a){
         P.voixOffId=A.audio.id;
         P.texteSource=A.texte;
         P.paragraphes=[];
-        P.style.x=50; P.style.y=88; // sous-titres toujours en bas, au centre
+        P.style.x=50; P.style.y=84; // sous-titres toujours au même endroit, en bas
 
         const textes=sousTitresDuTexte(A.texte,P.style.taillePct,1080);
-        const cales=calerSousTitresAuto(textes,A.pauses,env.duree,0);
+        const cales=calerSousTitresAuto(textes,A.pauses,env.duree,0,A.sequences);
         P.sousTitres=cales.map(c=>({id:"s"+Math.random().toString(36).slice(2),
           debut:c.debut,fin:c.fin,texte:c.texte,paragrapheId:null}));
         E.pauses=A.pauses;
@@ -2369,7 +2404,7 @@ function acte(a){
   });
 
   if(nom==="replacer") return agir("Replacement",()=>{
-    P.style.x=50; P.style.y=88; P.style.taillePct=5; regenerer();
+    P.style.x=50; P.style.y=84; P.style.taillePct=7; regenerer();
   });
 
   if(nom==="lancerExport"){
