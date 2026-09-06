@@ -627,6 +627,95 @@ function avecDelai(promesse, ms, message){
    se résout qu'avec un geste actif — après le sélecteur de fichiers, ce geste
    a expiré, et l'attente ne se terminait jamais. Un OfflineAudioContext
    décode sans rien démarrer, donc sans ce piège. */
+/* Repli quand decodeAudioData refuse le conteneur — cas courant des .mov
+   filmés à l'iPhone, que Safari sait lire mais pas décoder hors ligne.
+   On lit alors la piste en accéléré et on mesure son énergie au passage.
+   Cela exige un contexte audio réellement démarré, donc un geste utilisateur :
+   l'appel doit venir d'un appui sur un bouton, jamais d'un enchaînement
+   automatique — c'est exactement ce qui figeait l'analyse auparavant. */
+const VITESSE_ANALYSE = 4;
+
+function analyserParLecture(file, surProgres){
+  return new Promise((res,rej)=>{
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if(!AC) return rej(new Error("audio non supporté par ce navigateur"));
+    const ctx = ctxAudio = ctxAudio || new AC();
+    const url = URL.createObjectURL(file);
+    const el = document.createElement(/^video\//.test(file.type) ? "video" : "audio");
+    el.src=url; el.preload="auto"; el.playsInline=true;
+    // Sans cela le navigateur corrige la hauteur du son, ce qui déforme
+    // l'échelle de temps : on veut un simple ré-échantillonnage linéaire.
+    if("preservesPitch" in el) el.preservesPitch=false;
+    if("webkitPreservesPitch" in el) el.webkitPreservesPitch=false;
+    el.style.cssText="position:absolute;width:1px;height:1px;opacity:0;pointer-events:none";
+    document.body.appendChild(el);
+
+    let fini=false, minuteur=null, proc=null, src=null, muet=null;
+    const db=[]; const PAS=0.02;
+
+    function nettoyer(){
+      clearTimeout(minuteur);
+      try{ el.pause(); }catch(e){}
+      try{ if(proc) proc.onaudioprocess=null; }catch(e){}
+      try{ if(src) src.disconnect(); if(proc) proc.disconnect(); if(muet) muet.disconnect(); }catch(e){}
+      try{ el.remove(); }catch(e){}
+      try{ URL.revokeObjectURL(url); }catch(e){}
+    }
+    function echouer(msg){ if(fini) return; fini=true; nettoyer(); rej(new Error(msg)); }
+    function reussir(){
+      if(fini) return; fini=true;
+      const duree = db.length*PAS;
+      nettoyer();
+      if(db.length<10) return rej(new Error("aucun son exploitable dans ce fichier"));
+      res({ env:{pasMs:20, db:Float32Array.from(db), duree}, duree });
+    }
+
+    el.addEventListener("error",()=>echouer("ce fichier ne peut pas être lu"),{once:true});
+    el.addEventListener("ended",reussir,{once:true});
+
+    el.addEventListener("loadedmetadata",async()=>{
+      if(fini) return;
+      const dureeMedia = el.duration;
+      if(!isFinite(dureeMedia) || dureeMedia<=0) return echouer("durée du fichier inconnue");
+      try{ await ctx.resume(); }catch(e){}
+      if(ctx.state!=="running") return echouer("l'analyse doit être lancée par un appui");
+
+      try{
+        src = ctx.createMediaElementSource(el);
+        proc = ctx.createScriptProcessor(4096,1,1);
+        muet = ctx.createGain(); muet.gain.value=0; // analyse silencieuse
+      }catch(e){ return echouer("analyse audio impossible sur ce fichier"); }
+
+      // Une tranche de 20 ms de média = 20/vitesse ms de temps réel.
+      const parTranche = Math.max(1, Math.round(ctx.sampleRate*PAS/VITESSE_ANALYSE));
+      let somme=0, n=0;
+      proc.onaudioprocess = e=>{
+        const d=e.inputBuffer.getChannelData(0);
+        for(let i=0;i<d.length;i++){
+          somme+=d[i]*d[i]; n++;
+          if(n>=parTranche){
+            const rms=Math.sqrt(somme/n);
+            db.push(rms>0?Math.max(-100,20*Math.log10(rms)):-100);
+            somme=0; n=0;
+          }
+        }
+      };
+      src.connect(proc); proc.connect(muet); muet.connect(ctx.destination);
+
+      el.addEventListener("timeupdate",()=>{
+        if(surProgres && dureeMedia) surProgres(Math.min(1, el.currentTime/dureeMedia));
+      });
+
+      el.playbackRate = VITESSE_ANALYSE;
+      // Garde large : la lecture accélérée doit durer environ duree/vitesse.
+      minuteur = setTimeout(()=>echouer("analyse trop longue"),
+        (dureeMedia/VITESSE_ANALYSE)*1000*2 + 20000);
+      const p = el.play();
+      if(p && p.catch) p.catch(()=>echouer("la lecture n'a pas pu démarrer"));
+    },{once:true});
+  });
+}
+
 async function analyserAudio(file, surEtape){
   if(surEtape) surEtape("Lecture du fichier");
   const brut = await avecDelai(file.arrayBuffer(), 60000, "lecture trop longue");
@@ -693,6 +782,7 @@ const E = {
   pleinEcran:false, zoomAp:{scale:1}, echellePxS:null,
   blocSelectionne:null, // {type,id} — un bloc à la fois ; il faut le sélectionner avant de le glisser
   auto:null, // parcours de montage automatique en cours
+  attenteLecture:null, // fichier en attente d'analyse par lecture accélérée
 };
 window.E = E; // lecture seule, pour le banc d'essai
 
@@ -1574,6 +1664,32 @@ EC.calage = () => {
 /* ---------- Montage automatique : trois écrans ---------------------------
    texte → bande son (séquençage) → un média par séquence → montage. */
 
+/* Quand le décodage direct échoue, on ne s'arrête pas là : on propose la
+   lecture accélérée. Elle a besoin d'un appui pour démarrer le son, donc
+   d'un écran avec un vrai bouton. */
+EC.analyseLecture = () => {
+  const A = E.attenteLecture || {};
+  const secondes = A.duree ? Math.ceil(A.duree/VITESSE_ANALYSE) : null;
+  const p = A.progres!=null ? Math.round(A.progres*100) : null;
+  return {
+    barre:{g:`<button data-act="annulerLecture">Annuler</button>`, titre:"Analyse de la voix"},
+    corps:`
+      <div class="legende" style="padding:10px 0 0">
+        Ce format ne peut pas être décodé directement — c'est le cas des vidéos
+        filmées à l'iPhone. La voix sera donc analysée en la lisant en accéléré,
+        sans aucun son.
+      </div>
+      <div class="micro">Fichier</div>
+      <div style="font-size:17px">${esc(A.nom||"")}</div>
+      ${secondes?`<div class="legende num" style="padding-top:6px">Environ ${secondes} s d'analyse.</div>`:""}
+      ${p!=null?`<div class="jauge" style="margin-top:22px"><i style="width:${p}%"></i></div>
+        <div class="legende num">Analyse en cours… ${p} %</div>`:""}`,
+    pied: p!=null
+      ? `<div class="legende" style="text-align:center">Laissez l'écran allumé jusqu'à la fin.</div>`
+      : `<button class="principal" data-act="lancerLecture">Analyser la voix</button>`,
+  };
+};
+
 EC.autoTexte = () => ({
   barre:{g:`<button data-act="quitterAuto">Annuler</button>`, titre:"Montage automatique"},
   corps:`
@@ -1876,7 +1992,10 @@ function acte(a){
           P.audios.push({id,nom:file.name,duree,dureeSource:duree,debut:0,decalage:0,env,url:true});
           E.toastEnAttente = file.name+" ajouté, "+tpsD(duree)+".";
         });
-      }catch(e){ toast("Fichier illisible : "+(e && e.message ? e.message : "format non reconnu")+"."); }
+      }catch(e){
+        E.attenteLecture = {file, nom:file.name, duree:null, progres:null, suite:"son"};
+        E.pile.push("analyseLecture"); rendre();
+      }
     });
     return;
   }
@@ -1933,6 +2052,53 @@ function acte(a){
     E.pleinEcran=!E.pleinEcran; E.zoomAp={scale:1}; // le pincement ne survit pas à l'entrée/sortie
     return rendre();
   }
+  if(nom==="annulerLecture"){
+    E.attenteLecture=null; E.autoAbandonne=true;
+    E.pile = (E.auto ? ["montage","autoTexte"] : ["montage","sons"]);
+    return rendre();
+  }
+
+  if(nom==="lancerLecture"){
+    const A=E.attenteLecture; if(!A || A.progres!=null) return;
+    A.progres=0; rendre(); // l'appui en cours démarre le contexte audio
+    analyserParLecture(A.file, pr=>{
+      if(!E.attenteLecture) return;
+      E.attenteLecture.progres=pr;
+      const j=document.querySelector(".jauge i");
+      if(j) j.style.width=Math.round(pr*100)+"%";
+      const l=[...document.querySelectorAll(".legende")].find(x=>/Analyse en cours/.test(x.textContent));
+      if(l) l.textContent="Analyse en cours… "+Math.round(pr*100)+" %";
+    }).then(({env,duree})=>{
+      if(!E.attenteLecture) return;
+      const suite=E.attenteLecture.suite, file=E.attenteLecture.file, nom2=E.attenteLecture.nom;
+      E.attenteLecture=null;
+      const id="a"+Date.now();
+      MEDIA.sons[id]=Object.assign(new Audio(URL.createObjectURL(file)),{preload:"auto"});
+      if(suite==="auto"){
+        const sq=sequencerAudio(env);
+        E.auto=Object.assign(E.auto||{},{
+          audio:{id,nom:nom2,duree,env}, ...sq,
+          medias:new Array(sq.sequences.length).fill(null),
+        });
+        E.pile=["montage","autoMedias"]; rendre();
+      } else {
+        agir("Ajout d'une bande son",()=>{
+          E.projet.audios.push({id,nom:nom2,duree,dureeSource:duree,debut:0,decalage:0,env,url:true});
+          E.pile=["montage","sons"];
+          E.toastEnAttente=nom2+" ajouté, "+tpsD(duree)+".";
+        });
+      }
+    }).catch(err=>{
+      if(!E.attenteLecture) return;
+      const suite=E.attenteLecture.suite;
+      E.attenteLecture=null;
+      E.pile = suite==="auto" ? ["montage","autoTexte"] : ["montage","sons"];
+      rendre();
+      toast("Analyse impossible : "+(err && err.message ? err.message : "fichier non exploitable")+".");
+    });
+    return;
+  }
+
   if(nom==="quitterAuto"){ E.auto=null; E.pile=["montage"]; return rendre(true); }
   if(nom==="stopAuto"){
     E.autoAbandonne=true; // l'analyse en cours ne doit plus rien afficher
@@ -1967,8 +2133,10 @@ function acte(a){
         E.pile=["montage","autoMedias"]; rendre();
       }catch(e){
         if(E.autoAbandonne) return;
-        E.pile=["montage","autoTexte"]; rendre();
-        toast("Fichier illisible : "+(e && e.message ? e.message : "format non reconnu")+".");
+        // Le décodage direct a échoué : la lecture accélérée reste possible,
+        // mais elle exige un appui pour démarrer le son.
+        E.attenteLecture = {file, nom:file.name, duree:null, progres:null, suite:"auto"};
+        E.pile=["montage","analyseLecture"]; rendre();
       }
     });
     return;
