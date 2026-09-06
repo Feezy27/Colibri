@@ -525,10 +525,50 @@ const SEUIL_TRANSITION = 0.8;
    enregistrement, avec un plancher absolu : sur une récitation posée, toutes
    les pauses se ressemblent, et un seuil purement relatif en découperait
    des dizaines. */
+const DUREE_MIN_SEQUENCE = 1.5; // en dessous, ce n'est pas un vrai segment mais un faux départ
+
+/* Un souffle ou un grésillement d'une poignée de tranches peut couper en deux
+   un silence pourtant continu à l'oreille. Sans fusion, un silence de 2 s
+   avec un sursaut minuscule en son milieu se réduit à sa seule moitié la
+   plus longue — le point milieu calculé ensuite tombe alors collé à un bout
+   du vrai silence plutôt qu'en son centre. On rapproche donc d'abord les
+   fragments séparés par un intervalle trop bref pour être un vrai mot. */
+function fusionnerPausesProches(pauses, ecartMax){
+  if(!pauses.length) return pauses;
+  const out=[{...pauses[0]}];
+  for(let i=1;i<pauses.length;i++){
+    const p=pauses[i], dernier=out[out.length-1];
+    if(p.debut-dernier.fin<=ecartMax) dernier.fin=p.fin;
+    else out.push({...p});
+  }
+  return out;
+}
+
+/* Une séquence plus courte que DUREE_MIN_SEQUENCE n'est presque jamais un
+   vrai segment voulu : c'est un faux départ, une hésitation, ou le tout début
+   de la voix mal séparé du blanc initial. On la fond dans sa voisine plutôt
+   que de forcer l'utilisateur à lui trouver un média. */
+function fusionnerSequencesCourtes(sequences, silences, dureeMin){
+  let seq = sequences.map(s=>({...s})), sil = silences.slice();
+  let repete = true;
+  while(repete && seq.length>1){
+    repete=false;
+    for(let i=0;i<seq.length;i++){
+      if(seq[i].fin-seq[i].debut < dureeMin){
+        if(i===0){ seq[1]={debut:seq[0].debut, fin:seq[1].fin}; seq.splice(0,1); sil.splice(0,1); }
+        else { seq[i-1]={debut:seq[i-1].debut, fin:seq[i].fin}; seq.splice(i,1); sil.splice(i-1,1); }
+        repete=true; break;
+      }
+    }
+  }
+  return {sequences:seq, silences:sil};
+}
+
 function sequencerAudio(env){
   const rep = reperes(env);
   const seuil = Math.min(rep.fond+9, rep.parole-3);
-  const toutes = detecterPauses(env, seuil, 0.15);
+  const brutes = detecterPauses(env, seuil, 0.15);
+  const toutes = fusionnerPausesProches(brutes, 0.25);
   const P = parole(toutes, env.duree);
   const debutVoix = P.seg.length ? P.seg[0].debut : 0;
   const finVoix   = P.seg.length ? P.seg[P.seg.length-1].fin : env.duree;
@@ -536,11 +576,13 @@ function sequencerAudio(env){
   // Seules comptent les pauses situées entre le premier et le dernier mot :
   // le blanc initial et le blanc final ne sont pas des transitions.
   const internes = toutes.filter(p=>p.debut>debutVoix+0.05 && p.fin<finVoix-0.05);
-  const silences = internes.filter(p=>p.fin-p.debut>=SEUIL_TRANSITION-1e-9);
+  const silencesBruts = internes.filter(p=>p.fin-p.debut>=SEUIL_TRANSITION-1e-9);
 
-  const sequences=[]; let t=debutVoix;
-  for(const sil of silences){ sequences.push({debut:t, fin:sil.debut}); t=sil.fin; }
-  sequences.push({debut:t, fin:finVoix});
+  const sequencesBrutes=[]; let t=debutVoix;
+  for(const sil of silencesBruts){ sequencesBrutes.push({debut:t, fin:sil.debut}); t=sil.fin; }
+  sequencesBrutes.push({debut:t, fin:finVoix});
+
+  const {sequences, silences} = fusionnerSequencesCourtes(sequencesBrutes, silencesBruts, DUREE_MIN_SEQUENCE);
 
   return {sequences, silences, pauses:toutes, debutVoix, finVoix, seuilStruct:SEUIL_TRANSITION};
 }
